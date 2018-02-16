@@ -45,6 +45,7 @@ class QobuzClient final : QobuzLoginHandler {
 	const char *const app_id, *const app_secret;
 	const char *const device_manufacturer_id;
 	const char *const username, *const email, *const password;
+	const char *const format_id;
 
 	CurlInit curl;
 
@@ -72,7 +73,12 @@ public:
 		    const char *_app_id, const char *_app_secret,
 		    const char *_device_manufacturer_id,
 		    const char *_username, const char *_email,
-		    const char *_password);
+		    const char *_password,
+		    const char *_format_id);
+
+	const char *GetFormatId() const noexcept {
+		return format_id;
+	}
 
 	gcc_pure
 	CurlGlobal &GetCurl() noexcept;
@@ -90,11 +96,14 @@ public:
 	 */
 	QobuzSession GetSession() const;
 
+	std::string MakeUrl(const char *object, const char *method,
+			    const std::multimap<std::string, std::string> &query) const noexcept;
+
 	std::string MakeSignedUrl(const char *object, const char *method,
 				  const std::multimap<std::string, std::string> &query) const noexcept;
 
 private:
-	void StartLogin() noexcept;
+	void StartLogin();
 
 	void InvokeHandlers() noexcept;
 

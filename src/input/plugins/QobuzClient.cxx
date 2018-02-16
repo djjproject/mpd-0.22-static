@@ -52,10 +52,12 @@ QobuzClient::QobuzClient(EventLoop &event_loop,
 			 const char *_app_id, const char *_app_secret,
 			 const char *_device_manufacturer_id,
 			 const char *_username, const char *_email,
-			 const char *_password)
+			 const char *_password,
+			 const char *_format_id)
 	:base_url(_base_url), app_id(_app_id), app_secret(_app_secret),
 	 device_manufacturer_id(_device_manufacturer_id),
 	 username(_username), email(_email), password(_password),
+	 format_id(_format_id),
 	 curl(event_loop),
 	 defer_invoke_handlers(event_loop, BIND_THIS_METHOD(InvokeHandlers))
 {
@@ -68,7 +70,7 @@ QobuzClient::GetCurl() noexcept
 }
 
 void
-QobuzClient::StartLogin() noexcept
+QobuzClient::StartLogin()
 {
 	assert(!session.IsDefined());
 	assert(!login_request);
@@ -101,9 +103,6 @@ QobuzClient::AddLoginHandler(QobuzSessionHandler &h) noexcept
 	} else {
 		// TODO: throttle login attempts?
 
-		std::string login_uri(base_url);
-		login_uri += "/login/username";
-
 		try {
 			StartLogin();
 		} catch (...) {
@@ -134,6 +133,7 @@ QobuzClient::OnQobuzLoginSuccess(QobuzSession &&_session) noexcept
 	{
 		const std::lock_guard<Mutex> protect(mutex);
 		session = std::move(_session);
+		login_request.reset();
 	}
 
 	ScheduleInvokeHandlers();
@@ -145,6 +145,7 @@ QobuzClient::OnQobuzLoginError(std::exception_ptr _error) noexcept
 	{
 		const std::lock_guard<Mutex> protect(mutex);
 		error = std::move(_error);
+		login_request.reset();
 	}
 
 	ScheduleInvokeHandlers();
@@ -161,8 +162,25 @@ QobuzClient::InvokeHandlers() noexcept
 		const ScopeUnlock unlock(mutex);
 		h.OnQobuzSession();
 	}
+}
 
-	login_request.reset();
+std::string
+QobuzClient::MakeUrl(const char *object, const char *method,
+		     const std::multimap<std::string, std::string> &query) const noexcept
+{
+	assert(!query.empty());
+
+	std::string uri(base_url);
+	uri += object;
+	uri.push_back('/');
+	uri += method;
+
+	QueryStringBuilder q;
+	for (const auto &i : query)
+		q(uri, i.first.c_str(), i.second.c_str());
+
+	q(uri, "app_id", app_id);
+	return uri;
 }
 
 std::string

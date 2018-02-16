@@ -21,6 +21,8 @@
 #include "TidalInputPlugin.hxx"
 #include "TidalSessionManager.hxx"
 #include "TidalTrackRequest.hxx"
+#include "TidalTagScanner.hxx"
+#include "TidalError.hxx"
 #include "CurlInputPlugin.hxx"
 #include "PluginUnavailable.hxx"
 #include "input/ProxyInputStream.hxx"
@@ -28,12 +30,18 @@
 #include "input/InputPlugin.hxx"
 #include "config/Block.hxx"
 #include "thread/Mutex.hxx"
+#include "util/Domain.hxx"
+#include "util/Exception.hxx"
 #include "util/StringCompare.hxx"
+#include "Log.hxx"
 
 #include <stdexcept>
 #include <memory>
 
+static constexpr Domain tidal_domain("tidal");
+
 static TidalSessionManager *tidal_session;
+static const char *tidal_audioquality;
 
 class TidalInputStream final
 	: public ProxyInputStream, TidalSessionHandler, TidalTrackHandler {
@@ -43,6 +51,12 @@ class TidalInputStream final
 	std::unique_ptr<TidalTrackRequest> track_request;
 
 	std::exception_ptr error;
+
+	/**
+	 * Retry to login if TidalError::IsInvalidSession() returns
+	 * true?
+	 */
+	bool retry_login = true;
 
 public:
 	TidalInputStream(const char *_uri, const char *_track_id,
@@ -74,7 +88,7 @@ private:
 	void OnTidalSession() noexcept override;
 
 	/* virtual methods from TidalTrackHandler */
-	void OnTidalTrackSuccess(std::string &&url) noexcept override;
+	void OnTidalTrackSuccess(std::string url) noexcept override;
 	void OnTidalTrackError(std::exception_ptr error) noexcept override;
 };
 
@@ -90,16 +104,23 @@ TidalInputStream::OnTidalSession() noexcept
 								    tidal_session->GetToken(),
 								    tidal_session->GetSession().c_str(),
 								    track_id.c_str(),
+								    tidal_audioquality,
 								    handler);
+		track_request->Start();
 	} catch (...) {
 		Failed(std::current_exception());
 	}
 }
 
 void
-TidalInputStream::OnTidalTrackSuccess(std::string &&url) noexcept
+TidalInputStream::OnTidalTrackSuccess(std::string url) noexcept
 {
+	FormatDebug(tidal_domain, "Tidal track '%s' resolves to %s",
+		    track_id.c_str(), url.c_str());
+
 	const std::lock_guard<Mutex> protect(mutex);
+
+	track_request.reset();
 
 	try {
 		SetInput(OpenCurlInputStream(url.c_str(), {},
@@ -109,10 +130,35 @@ TidalInputStream::OnTidalTrackSuccess(std::string &&url) noexcept
 	}
 }
 
+gcc_pure
+static bool
+IsInvalidSession(std::exception_ptr e) noexcept
+{
+	try {
+		std::rethrow_exception(e);
+	} catch (const TidalError &te) {
+		return te.IsInvalidSession();
+	} catch (...) {
+		return false;
+	}
+}
+
 void
 TidalInputStream::OnTidalTrackError(std::exception_ptr e) noexcept
 {
 	const std::lock_guard<Mutex> protect(mutex);
+
+	if (retry_login && IsInvalidSession(e)) {
+		/* the session has expired - obtain a new session id
+		   by logging in again */
+
+		FormatInfo(tidal_domain, "Session expired ('%s'), retrying to log in",
+			   GetFullMessage(e).c_str());
+
+		retry_login = false;
+		tidal_session->AddLoginHandler(*this);
+		return;
+	}
 
 	Failed(e);
 }
@@ -135,7 +181,7 @@ InitTidalInput(EventLoop &event_loop, const ConfigBlock &block)
 	if (password == nullptr)
 		throw PluginUnavailable("No Tidal password configured");
 
-	// TODO: "audioquality" setting
+	tidal_audioquality = block.GetBlockValue("audioquality", "HIGH");
 
 	tidal_session = new TidalSessionManager(event_loop, base_url, token,
 						username, password);
@@ -147,18 +193,30 @@ FinishTidalInput()
 	delete tidal_session;
 }
 
+gcc_pure
+static const char *
+ExtractTidalTrackId(const char *uri)
+{
+	const char *track_id = StringAfterPrefix(uri, "tidal://track/");
+	if (track_id == nullptr) {
+		track_id = StringAfterPrefix(uri, "https://listen.tidal.com/track/");
+		if (track_id == nullptr)
+			return nullptr;
+	}
+
+	if (*track_id == 0)
+		return nullptr;
+
+	return track_id;
+}
+
 static InputStreamPtr
 OpenTidalInput(const char *uri, Mutex &mutex, Cond &cond)
 {
 	assert(tidal_session != nullptr);
 
-	const char *track_id;
-
-	track_id = StringAfterPrefix(uri, "tidal://track/");
+	const char *track_id = ExtractTidalTrackId(uri);
 	if (track_id == nullptr)
-		track_id = StringAfterPrefix(uri, "https://listen.tidal.com/track/");
-
-	if (track_id == nullptr || *track_id == 0)
 		return nullptr;
 
 	// TODO: validate track_id
@@ -166,9 +224,25 @@ OpenTidalInput(const char *uri, Mutex &mutex, Cond &cond)
 	return std::make_unique<TidalInputStream>(uri, track_id, mutex, cond);
 }
 
+static std::unique_ptr<RemoteTagScanner>
+ScanTidalTags(const char *uri, RemoteTagHandler &handler)
+{
+	assert(tidal_session != nullptr);
+
+	const char *track_id = ExtractTidalTrackId(uri);
+	if (track_id == nullptr)
+		return nullptr;
+
+	return std::make_unique<TidalTagScanner>(tidal_session->GetCurl(),
+						 tidal_session->GetBaseUrl(),
+						 tidal_session->GetToken(),
+						 track_id, handler);
+}
+
 const InputPlugin tidal_input_plugin = {
 	"tidal",
 	InitTidalInput,
 	FinishTidalInput,
 	OpenTidalInput,
+	ScanTidalTags,
 };

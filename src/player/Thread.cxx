@@ -256,8 +256,12 @@ private:
 	bool SeekDecoder() noexcept;
 
 	void CancelPendingSeek() noexcept {
+		if (!pc.seeking)
+			return;
+
 		pending_seek = SongTime::zero();
 		pc.seeking = false;
+		pc.ClientSignal();
 	}
 
 	/**
@@ -754,7 +758,7 @@ static void
 play_chunk(PlayerControl &pc,
 	   DetachedSong &song, MusicChunk *chunk,
 	   MusicBuffer &buffer,
-	   const AudioFormat format) noexcept
+	   const AudioFormat format)
 {
 	assert(chunk->CheckFormat(format));
 

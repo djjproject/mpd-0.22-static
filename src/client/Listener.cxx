@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,11 +17,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef MPD_INPUT_DOMAIN_HXX
-#define MPD_INPUT_DOMAIN_HXX
+#include "config.h"
+#include "Listener.hxx"
+#include "Client.hxx"
+#include "net/UniqueSocketDescriptor.hxx"
+#include "net/SocketAddress.hxx"
 
-class Domain;
-
-extern const Domain input_domain;
-
-#endif
+void
+ClientListener::OnAccept(UniqueSocketDescriptor fd,
+			 SocketAddress address, int uid) noexcept
+{
+	client_new(GetEventLoop(), partition,
+		   std::move(fd), address, uid);
+}

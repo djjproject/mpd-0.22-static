@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,8 +17,23 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "config.h"
-#include "Domain.hxx"
-#include "util/Domain.hxx"
+#ifndef MPD_REMOTE_TAG_SCANNER_HXX
+#define MPD_REMOTE_TAG_SCANNER_HXX
 
-const Domain input_domain("input");
+#include <exception>
+
+struct Tag;
+
+class RemoteTagHandler {
+public:
+	virtual void OnRemoteTag(Tag &&tag) noexcept = 0;
+	virtual void OnRemoteTagError(std::exception_ptr e) noexcept = 0;
+};
+
+class RemoteTagScanner {
+public:
+	virtual ~RemoteTagScanner() noexcept = default;
+	virtual void Start() = 0;
+};
+
+#endif

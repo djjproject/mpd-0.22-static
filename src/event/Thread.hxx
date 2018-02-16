@@ -36,29 +36,20 @@ public:
 	EventThread()
 		:event_loop(ThreadId::Null()), thread(BIND_THIS_METHOD(Run)) {}
 
-	~EventThread() {
+	~EventThread() noexcept {
 		Stop();
 	}
 
-	EventLoop &GetEventLoop() {
+	EventLoop &GetEventLoop() noexcept {
 		return event_loop;
 	}
 
 	void Start();
 
-	/**
-	 * Ask the thread to stop, but does not wait for it.  Usually,
-	 * you don't need to call this function, because Stop()
-	 * includes this.
-	 */
-	void StopAsync() {
-		event_loop.Break();
-	}
-
-	void Stop();
+	void Stop() noexcept;
 
 private:
-	void Run();
+	void Run() noexcept;
 };
 
 #endif /* MAIN_NOTIFY_H */

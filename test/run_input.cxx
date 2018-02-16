@@ -23,9 +23,14 @@
 #include "config/ConfigGlobal.hxx"
 #include "input/InputStream.hxx"
 #include "input/Init.hxx"
+#include "input/Registry.hxx"
+#include "input/InputPlugin.hxx"
+#include "input/RemoteTagScanner.hxx"
+#include "input/ScanTags.hxx"
 #include "event/Thread.hxx"
 #include "thread/Cond.hxx"
 #include "Log.hxx"
+#include "LogBackend.hxx"
 #include "fs/Path.hxx"
 #include "fs/io/BufferedOutputStream.hxx"
 #include "fs/io/StdioOutputStream.hxx"
@@ -46,14 +51,22 @@ struct CommandLine {
 	const char *uri = nullptr;
 
 	Path config_path = nullptr;
+
+	bool verbose = false;
+
+	bool scan = false;
 };
 
 enum Option {
 	OPTION_CONFIG,
+	OPTION_VERBOSE,
+	OPTION_SCAN,
 };
 
 static constexpr OptionDef option_defs[] = {
 	{"config", 0, true, "Load a MPD configuration file"},
+	{"verbose", 'v', false, "Verbose logging"},
+	{"scan", 0, false, "Scan tags instead of reading raw data"},
 };
 
 static CommandLine
@@ -67,12 +80,20 @@ ParseCommandLine(int argc, char **argv)
 		case OPTION_CONFIG:
 			c.config_path = Path::FromFS(o.value);
 			break;
+
+		case OPTION_VERBOSE:
+			c.verbose = true;
+			break;
+
+		case OPTION_SCAN:
+			c.scan = true;
+			break;
 		}
 	}
 
 	auto args = option_parser.GetRemaining();
 	if (args.size != 1)
-		throw std::runtime_error("Usage: run_input [--config=FILE] URI");
+		throw std::runtime_error("Usage: run_input [--verbose] [--config=FILE] URI");
 
 	c.uri = args.front();
 	return c;
@@ -82,7 +103,9 @@ class GlobalInit {
 	EventThread io_thread;
 
 public:
-	GlobalInit(Path config_path) {
+	GlobalInit(Path config_path, bool verbose) {
+		SetLogThreshold(verbose ? LogLevel::DEBUG : LogLevel::INFO);
+
 		io_thread.Start();
 		config_global_init();
 
@@ -149,13 +172,69 @@ dump_input_stream(InputStream *is)
 	return 0;
 }
 
+class DumpRemoteTagHandler final : public RemoteTagHandler {
+	Mutex mutex;
+	Cond cond;
+
+	Tag tag;
+	std::exception_ptr error;
+
+	bool done = false;
+
+public:
+	Tag Wait() {
+		const std::lock_guard<Mutex> lock(mutex);
+		while (!done)
+			cond.wait(mutex);
+
+		if (error)
+			std::rethrow_exception(error);
+
+		return std::move(tag);
+	}
+
+	/* virtual methods from RemoteTagHandler */
+	void OnRemoteTag(Tag &&_tag) noexcept override {
+		const std::lock_guard<Mutex> lock(mutex);
+		tag = std::move(_tag);
+		done = true;
+		cond.broadcast();
+	}
+
+	void OnRemoteTagError(std::exception_ptr e) noexcept override {
+		const std::lock_guard<Mutex> lock(mutex);
+		error = std::move(e);
+		done = true;
+		cond.broadcast();
+	}
+};
+
+static int
+Scan(const char *uri)
+{
+	DumpRemoteTagHandler handler;
+
+	auto scanner = InputScanTags(uri, handler);
+	if (!scanner) {
+		fprintf(stderr, "Unsupported URI\n");
+		return EXIT_FAILURE;
+	}
+
+	scanner->Start();
+	tag_save(stdout, handler.Wait());
+	return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 try {
 	const auto c = ParseCommandLine(argc, argv);
 
 	/* initialize MPD */
 
-	const GlobalInit init(c.config_path);
+	const GlobalInit init(c.config_path, c.verbose);
+
+	if (c.scan)
+		return Scan(c.uri);
 
 	/* open the stream and dump it */
 

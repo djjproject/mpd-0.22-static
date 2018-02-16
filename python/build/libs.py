@@ -29,6 +29,8 @@ opus = AutotoolsProject(
     'lib/libopus.a',
     [
         '--disable-shared', '--enable-static',
+        '--disable-doc',
+        '--disable-extra-programs',
     ],
 
     # suppress "visibility default" from opus_defines.h
@@ -42,7 +44,9 @@ flac = AutotoolsProject(
     [
         '--disable-shared', '--enable-static',
         '--disable-xmms-plugin', '--disable-cpplibs',
+        '--disable-doxygen-docs',
     ],
+    subdirs=['include', 'src/libFLAC'],
 )
 
 zlib = ZlibProject(
@@ -83,8 +87,8 @@ libmad = AutotoolsProject(
 )
 
 liblame = AutotoolsProject(
-    'http://downloads.sourceforge.net/project/lame/lame/3.99/lame-3.99.5.tar.gz',
-    '24346b4158e4af3bd9f2e194bb23eb473c75fb7377011523353196b19b9a23ff',
+    'http://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz',
+    'ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e',
     'lib/libmp3lame.a',
     [
         '--disable-shared', '--enable-static',
@@ -335,8 +339,8 @@ ffmpeg = FfmpegProject(
 )
 
 curl = AutotoolsProject(
-    'http://curl.haxx.se/download/curl-7.57.0.tar.xz',
-    'f5f6fd3c72b7b8389969f4fb671ed8532fa9b5bb7a5cae7ca89bc1cea45c7878',
+    'http://curl.haxx.se/download/curl-7.58.0.tar.xz',
+    '6a813875243609eb75f37fa72044e4ad618b55ec15a4eafdac2df6a7e800e3e3',
     'lib/libcurl.a',
     [
         '--disable-shared', '--enable-static',

@@ -21,6 +21,7 @@
 #include "QobuzInputPlugin.hxx"
 #include "QobuzClient.hxx"
 #include "QobuzTrackRequest.hxx"
+#include "QobuzTagScanner.hxx"
 #include "CurlInputPlugin.hxx"
 #include "PluginUnavailable.hxx"
 #include "input/ProxyInputStream.hxx"
@@ -76,7 +77,7 @@ private:
 	void OnQobuzSession() noexcept override;
 
 	/* virtual methods from QobuzTrackHandler */
-	void OnQobuzTrackSuccess(std::string &&url) noexcept override;
+	void OnQobuzTrackSuccess(std::string url) noexcept override;
 	void OnQobuzTrackError(std::exception_ptr error) noexcept override;
 };
 
@@ -100,9 +101,10 @@ QobuzInputStream::OnQobuzSession() noexcept
 }
 
 void
-QobuzInputStream::OnQobuzTrackSuccess(std::string &&url) noexcept
+QobuzInputStream::OnQobuzTrackSuccess(std::string url) noexcept
 {
 	const std::lock_guard<Mutex> protect(mutex);
+	track_request.reset();
 
 	try {
 		SetInput(OpenCurlInputStream(url.c_str(), {},
@@ -116,6 +118,7 @@ void
 QobuzInputStream::OnQobuzTrackError(std::exception_ptr e) noexcept
 {
 	const std::lock_guard<Mutex> protect(mutex);
+	track_request.reset();
 
 	Failed(e);
 }
@@ -146,10 +149,13 @@ InitQobuzInput(EventLoop &event_loop, const ConfigBlock &block)
 	if (password == nullptr)
 		throw PluginUnavailable("No Qobuz password configured");
 
+	const char *format_id = block.GetBlockValue("format_id", "5");
+
 	qobuz_client = new QobuzClient(event_loop, base_url,
 				       app_id, app_secret,
 				       device_manufacturer_id,
-				       username, email, password);
+				       username, email, password,
+				       format_id);
 }
 
 static void
@@ -158,18 +164,28 @@ FinishQobuzInput()
 	delete qobuz_client;
 }
 
+gcc_pure
+static const char *
+ExtractQobuzTrackId(const char *uri)
+{
+	// TODO: what's the standard "qobuz://" URI syntax?
+	const char *track_id = StringAfterPrefix(uri, "qobuz://track/");
+	if (track_id == nullptr)
+		return nullptr;
+
+	if (*track_id == 0)
+		return nullptr;
+
+	return track_id;
+}
+
 static InputStreamPtr
 OpenQobuzInput(const char *uri, Mutex &mutex, Cond &cond)
 {
 	assert(qobuz_client != nullptr);
 
-	const char *track_id;
-
-	// TODO: what's the standard "qobuz://" URI syntax?
-
-	track_id = StringAfterPrefix(uri, "qobuz://track/");
-
-	if (track_id == nullptr || *track_id == 0)
+	const char *track_id = ExtractQobuzTrackId(uri);
+	if (track_id == nullptr)
 		return nullptr;
 
 	// TODO: validate track_id
@@ -177,9 +193,23 @@ OpenQobuzInput(const char *uri, Mutex &mutex, Cond &cond)
 	return std::make_unique<QobuzInputStream>(uri, track_id, mutex, cond);
 }
 
+static std::unique_ptr<RemoteTagScanner>
+ScanQobuzTags(const char *uri, RemoteTagHandler &handler)
+{
+	assert(qobuz_client != nullptr);
+
+	const char *track_id = ExtractQobuzTrackId(uri);
+	if (track_id == nullptr)
+		return nullptr;
+
+	return std::make_unique<QobuzTagScanner>(*qobuz_client, track_id,
+						 handler);
+}
+
 const InputPlugin qobuz_input_plugin = {
 	"qobuz",
 	InitQobuzInput,
 	FinishQobuzInput,
 	OpenQobuzInput,
+	ScanQobuzTags,
 };
