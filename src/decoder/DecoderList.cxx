@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -28,6 +28,7 @@
 #include "plugins/DsfDecoderPlugin.hxx"
 #include "plugins/SacdIsoDecoderPlugin.hxx"
 #include "plugins/DvdaIsoDecoderPlugin.hxx"
+#include "plugins/HybridDsdDecoderPlugin.hxx"
 #include "plugins/FlacDecoderPlugin.h"
 #include "plugins/OpusDecoderPlugin.h"
 #include "plugins/VorbisDecoderPlugin.h"
@@ -75,6 +76,7 @@ const struct DecoderPlugin *const decoder_plugins[] = {
 #ifdef ENABLE_DSD
 	&dff_decoder_plugin,
 	&dsf_decoder_plugin,
+	&hybrid_dsd_decoder_plugin,
 #endif
 #ifdef ENABLE_FAAD
 	&faad_decoder_plugin,
