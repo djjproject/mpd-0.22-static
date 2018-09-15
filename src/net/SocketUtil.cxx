@@ -23,6 +23,8 @@
 #include "SocketError.hxx"
 #include "UniqueSocketDescriptor.hxx"
 
+#include <sys/stat.h>
+
 UniqueSocketDescriptor
 socket_bind_listen(int domain, int type, int protocol,
 		   SocketAddress address,
@@ -31,6 +33,13 @@ socket_bind_listen(int domain, int type, int protocol,
 	UniqueSocketDescriptor fd;
 	if (!fd.CreateNonBlock(domain, type, protocol))
 		throw MakeSocketError("Failed to create socket");
+
+#ifdef HAVE_UN
+	if (domain == AF_UNIX) {
+		/* Prevent access until right permissions are set */
+		fchmod(fd.Get(), 0);
+	}
+#endif
 
 	if (!fd.SetReuseAddress())
 		throw MakeSocketError("setsockopt() failed");

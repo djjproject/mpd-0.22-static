@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,9 +22,13 @@
 #include "../DecoderAPI.hxx"
 #include "tag/Handler.hxx"
 #include "tag/Builder.hxx"
-#include "DetachedSong.hxx"
+#include "song/DetachedSong.hxx"
 #include "fs/Path.hxx"
 #include "fs/AllocatedPath.hxx"
+#ifdef HAVE_SIDPLAYFP
+#include "fs/io/FileReader.cxx"
+#include "util/RuntimeError.hxx"
+#endif
 #include "util/Macros.hxx"
 #include "util/StringFormat.hxx"
 #include "util/Domain.hxx"
@@ -65,6 +69,21 @@ static unsigned default_songlength;
 
 static bool filter_setting;
 
+#ifdef HAVE_SIDPLAYFP
+static constexpr unsigned rom_size = 8192;
+static uint8_t *kernal, *basic = nullptr;
+
+static void loadRom(const Path rom_path, uint8_t *dump)
+{
+	FileReader romDump(rom_path);
+	if (romDump.Read(dump, rom_size) != rom_size)
+	{
+		throw FormatRuntimeError
+			("Could not load rom dump '%s'", rom_path.c_str());
+	}
+}
+#endif
+
 static SidDatabase *
 sidplay_load_songlength_db(const Path path)
 {
@@ -100,6 +119,24 @@ sidplay_init(const ConfigBlock &block)
 
 	filter_setting = block.GetBlockValue("filter", true);
 
+#ifdef HAVE_SIDPLAYFP
+	/* read kernal rom dump file */
+	const auto kernal_path = block.GetPath("kernal");
+	if (!kernal_path.IsNull())
+	{
+		kernal = new uint8_t[rom_size];
+		loadRom(kernal_path, kernal);
+	}
+
+	/* read basic rom dump file */
+	const auto basic_path = block.GetPath("basic");
+	if (!basic_path.IsNull())
+	{
+		basic = new uint8_t[rom_size];
+		loadRom(basic_path, basic);
+	}
+#endif
+
 	return true;
 }
 
@@ -107,6 +144,11 @@ static void
 sidplay_finish() noexcept
 {
 	delete songlength_database;
+
+#ifdef HAVE_SIDPLAYFP
+	delete[] basic;
+	delete[] kernal;
+#endif
 }
 
 struct SidplayContainerPath {
@@ -202,6 +244,8 @@ sidplay_file_decode(DecoderClient &client, Path path_fs)
 
 #ifdef HAVE_SIDPLAYFP
 	sidplayfp player;
+
+	player.setRoms(kernal, basic, nullptr);
 #else
 	sidplay2 player;
 #endif
@@ -405,7 +449,7 @@ GetInfoString(const SidTuneInfo &info, unsigned i) noexcept
 
 static void
 ScanSidTuneInfo(const SidTuneInfo &info, unsigned track, unsigned n_tracks,
-		const TagHandler &handler, void *handler_ctx)
+		TagHandler &handler) noexcept
 {
 	/* title */
 	const char *title = GetInfoString(info, 0);
@@ -416,31 +460,26 @@ ScanSidTuneInfo(const SidTuneInfo &info, unsigned track, unsigned n_tracks,
 		const auto tag_title =
 			StringFormat<1024>("%s (%u/%u)",
 					   title, track, n_tracks);
-		tag_handler_invoke_tag(handler, handler_ctx,
-				       TAG_TITLE, tag_title);
+		handler.OnTag(TAG_TITLE, tag_title);
 	} else
-		tag_handler_invoke_tag(handler, handler_ctx, TAG_TITLE, title);
+		handler.OnTag(TAG_TITLE, title);
 
 	/* artist */
 	const char *artist = GetInfoString(info, 1);
 	if (artist != nullptr)
-		tag_handler_invoke_tag(handler, handler_ctx, TAG_ARTIST,
-				       artist);
+		handler.OnTag(TAG_ARTIST, artist);
 
 	/* date */
 	const char *date = GetInfoString(info, 2);
 	if (date != nullptr)
-		tag_handler_invoke_tag(handler, handler_ctx, TAG_DATE,
-				       date);
+		handler.OnTag(TAG_DATE, date);
 
 	/* track */
-	tag_handler_invoke_tag(handler, handler_ctx, TAG_TRACK,
-			       StringFormat<16>("%u", track));
+	handler.OnTag(TAG_TRACK, StringFormat<16>("%u", track));
 }
 
 static bool
-sidplay_scan_file(Path path_fs,
-		  const TagHandler &handler, void *handler_ctx) noexcept
+sidplay_scan_file(Path path_fs, TagHandler &handler) noexcept
 {
 	const auto container = ParseContainerPath(path_fs);
 	const unsigned song_num = container.track;
@@ -463,13 +502,12 @@ sidplay_scan_file(Path path_fs,
 	const unsigned n_tracks = info.songs;
 #endif
 
-	ScanSidTuneInfo(info, song_num, n_tracks, handler, handler_ctx);
+	ScanSidTuneInfo(info, song_num, n_tracks, handler);
 
 	/* time */
 	const auto duration = get_song_length(tune);
 	if (!duration.IsNegative())
-		tag_handler_invoke_duration(handler, handler_ctx,
-					    SongTime(duration));
+		handler.OnDuration(SongTime(duration));
 
 	return true;
 }
@@ -506,8 +544,8 @@ sidplay_container_scan(Path path_fs)
 	for (unsigned i = 1; i <= n_tracks; ++i) {
 		tune.selectSong(i);
 
-		ScanSidTuneInfo(info, i, n_tracks,
-				add_tag_handler, &tag_builder);
+		AddTagHandler h(tag_builder);
+		ScanSidTuneInfo(info, i, n_tracks, h);
 
 		char track_name[32];
 		/* Construct container/tune path names, eg.

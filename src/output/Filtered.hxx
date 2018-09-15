@@ -28,6 +28,7 @@
 #include <map>
 #include <chrono>
 
+class FilterFactory;
 class PreparedFilter;
 class MusicPipe;
 class EventLoop;
@@ -127,12 +128,14 @@ public:
 	 */
 	FilteredAudioOutput(const char *_plugin_name,
 			    std::unique_ptr<AudioOutput> &&_output,
-			    const ConfigBlock &block);
+			    const ConfigBlock &block,
+			    FilterFactory *filter_factory);
 
 	~FilteredAudioOutput();
 
 private:
-	void Configure(const ConfigBlock &block);
+	void Configure(const ConfigBlock &block,
+		       FilterFactory *filter_factory);
 
 public:
 	void Setup(EventLoop &event_loop,
@@ -229,18 +232,13 @@ public:
 };
 
 /**
- * Notify object used by the thread's client, i.e. we will send a
- * notify signal to this object, expecting the caller to wait on it.
- */
-extern struct notify audio_output_client_notify;
-
-/**
  * Throws #std::runtime_error on error.
  */
 std::unique_ptr<FilteredAudioOutput>
 audio_output_new(EventLoop &event_loop,
 		 const ReplayGainConfig &replay_gain_config,
 		 const ConfigBlock &block,
+		 FilterFactory *filter_factory,
 		 MixerListener &mixer_listener);
 
 #endif

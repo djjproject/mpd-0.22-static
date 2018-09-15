@@ -21,13 +21,12 @@
 #include "MultipleOutputs.hxx"
 #include "Filtered.hxx"
 #include "Domain.hxx"
-#include "MusicBuffer.hxx"
 #include "MusicPipe.hxx"
 #include "MusicChunk.hxx"
+#include "filter/Factory.hxx"
 #include "config/Block.hxx"
-#include "config/ConfigGlobal.hxx"
-#include "config/ConfigOption.hxx"
-#include "notify.hxx"
+#include "config/Data.hxx"
+#include "config/Option.hxx"
 #include "util/RuntimeError.hxx"
 
 #include <stdexcept>
@@ -53,9 +52,11 @@ static std::unique_ptr<FilteredAudioOutput>
 LoadOutput(EventLoop &event_loop,
 	   const ReplayGainConfig &replay_gain_config,
 	   MixerListener &mixer_listener,
-	   const ConfigBlock &block)
+	   const ConfigBlock &block,
+	   FilterFactory *filter_factory)
 try {
 	return audio_output_new(event_loop, replay_gain_config, block,
+				filter_factory,
 				mixer_listener);
 } catch (...) {
 	if (block.line > 0)
@@ -69,11 +70,12 @@ static AudioOutputControl *
 LoadOutputControl(EventLoop &event_loop,
 		  const ReplayGainConfig &replay_gain_config,
 		  MixerListener &mixer_listener,
-		  AudioOutputClient &client, const ConfigBlock &block)
+		  AudioOutputClient &client, const ConfigBlock &block,
+		  FilterFactory *filter_factory)
 {
 	auto output = LoadOutput(event_loop, replay_gain_config,
 				 mixer_listener,
-				 block);
+				 block, filter_factory);
 	auto *control = new AudioOutputControl(std::move(output), client);
 
 	try {
@@ -89,15 +91,18 @@ LoadOutputControl(EventLoop &event_loop,
 
 void
 MultipleOutputs::Configure(EventLoop &event_loop,
+			   const ConfigData &config,
 			   const ReplayGainConfig &replay_gain_config,
 			   AudioOutputClient &client)
 {
-	for (const auto *param = config_get_block(ConfigBlockOption::AUDIO_OUTPUT);
-	     param != nullptr; param = param->next) {
+	FilterFactory filter_factory(config);
+
+	for (const auto &block : config.GetBlockList(ConfigBlockOption::AUDIO_OUTPUT)) {
+		block.SetUsed();
 		auto *output = LoadOutputControl(event_loop,
 						 replay_gain_config,
 						 mixer_listener,
-						 client, *param);
+						 client, block, &filter_factory);
 		if (FindByName(output->GetName()) != nullptr)
 			throw FormatRuntimeError("output devices with identical "
 						 "names: %s", output->GetName());
@@ -111,7 +116,8 @@ MultipleOutputs::Configure(EventLoop &event_loop,
 		auto *output = LoadOutputControl(event_loop,
 						 replay_gain_config,
 						 mixer_listener,
-						 client, empty);
+						 client, empty,
+						 nullptr);
 		outputs.push_back(output);
 	}
 }
@@ -126,7 +132,7 @@ MultipleOutputs::AddNullOutput(EventLoop &event_loop,
 
 	auto *output = LoadOutputControl(event_loop, replay_gain_config,
 					 mixer_listener,
-					 client, block);
+					 client, block, nullptr);
 	outputs.push_back(output);
 }
 
@@ -150,29 +156,16 @@ MultipleOutputs::EnableDisable()
 		ao->EnableDisableAsync();
 	}
 
-	for (auto *ao : outputs) {
-		const std::lock_guard<Mutex> lock(ao->mutex);
-		ao->WaitForCommand();
-	}
-}
-
-bool
-MultipleOutputs::AllFinished() const noexcept
-{
-	for (auto *ao : outputs) {
-		const std::lock_guard<Mutex> protect(ao->mutex);
-		if (ao->IsBusy())
-			return false;
-	}
-
-	return true;
+	WaitAll();
 }
 
 void
 MultipleOutputs::WaitAll() noexcept
 {
-	while (!AllFinished())
-		audio_output_client_notify.Wait();
+	for (auto *ao : outputs) {
+		const std::lock_guard<Mutex> protect(ao->mutex);
+		ao->WaitForCommand();
+	}
 }
 
 void
@@ -205,9 +198,8 @@ MultipleOutputs::SetReplayGainMode(ReplayGainMode mode) noexcept
 }
 
 void
-MultipleOutputs::Play(MusicChunk *chunk)
+MultipleOutputs::Play(MusicChunkPtr chunk)
 {
-	assert(buffer != nullptr);
 	assert(pipe != nullptr);
 	assert(chunk != nullptr);
 	assert(chunk->CheckFormat(input_audio_format));
@@ -216,29 +208,23 @@ MultipleOutputs::Play(MusicChunk *chunk)
 		/* TODO: obtain real error */
 		throw std::runtime_error("Failed to open audio output");
 
-	pipe->Push(chunk);
+	pipe->Push(std::move(chunk));
 
 	for (auto *ao : outputs)
 		ao->LockPlay();
 }
 
 void
-MultipleOutputs::Open(const AudioFormat audio_format,
-		      MusicBuffer &_buffer)
+MultipleOutputs::Open(const AudioFormat audio_format)
 {
 	bool ret = false, enabled = false;
-
-	assert(buffer == nullptr || buffer == &_buffer);
-	assert((pipe == nullptr) == (buffer == nullptr));
-
-	buffer = &_buffer;
 
 	/* the audio format must be the same as existing chunks in the
 	   pipe */
 	assert(pipe == nullptr || pipe->CheckFormat(audio_format));
 
 	if (pipe == nullptr)
-		pipe = new MusicPipe();
+		pipe = std::make_unique<MusicPipe>();
 	else
 		/* if the pipe hasn't been cleared, the the audio
 		   format must not have changed */
@@ -318,10 +304,8 @@ MultipleOutputs::CheckPipe() noexcept
 {
 	const MusicChunk *chunk;
 	bool is_tail;
-	MusicChunk *shifted;
 	bool locked[outputs.size()];
 
-	assert(buffer != nullptr);
 	assert(pipe != nullptr);
 
 	while ((chunk = pipe->Peek()) != nullptr) {
@@ -344,8 +328,8 @@ MultipleOutputs::CheckPipe() noexcept
 			ClearTailChunk(chunk, locked);
 
 		/* remove the chunk from the pipe */
-		shifted = pipe->Shift();
-		assert(shifted == chunk);
+		const auto shifted = pipe->Shift();
+		assert(shifted.get() == chunk);
 
 		if (is_tail)
 			/* unlock all audio outputs which were locked
@@ -354,8 +338,8 @@ MultipleOutputs::CheckPipe() noexcept
 				if (locked[i])
 					outputs[i]->mutex.unlock();
 
-		/* return the chunk to the buffer */
-		buffer->Return(shifted);
+		/* chunk is automatically returned to the buffer by
+		   ~MusicChunkPtr() */
 	}
 
 	return 0;
@@ -394,7 +378,7 @@ MultipleOutputs::Cancel() noexcept
 	/* clear the music pipe and return all chunks to the buffer */
 
 	if (pipe != nullptr)
-		pipe->Clear(*buffer);
+		pipe->Clear();
 
 	/* the audio outputs are now waiting for a signal, to
 	   synchronize the cleared music pipe */
@@ -412,15 +396,7 @@ MultipleOutputs::Close() noexcept
 	for (auto *ao : outputs)
 		ao->LockCloseWait();
 
-	if (pipe != nullptr) {
-		assert(buffer != nullptr);
-
-		pipe->Clear(*buffer);
-		delete pipe;
-		pipe = nullptr;
-	}
-
-	buffer = nullptr;
+	pipe.reset();
 
 	input_audio_format.Clear();
 
@@ -433,15 +409,7 @@ MultipleOutputs::Release() noexcept
 	for (auto *ao : outputs)
 		ao->LockRelease();
 
-	if (pipe != nullptr) {
-		assert(buffer != nullptr);
-
-		pipe->Clear(*buffer);
-		delete pipe;
-		pipe = nullptr;
-	}
-
-	buffer = nullptr;
+	pipe.reset();
 
 	input_audio_format.Clear();
 

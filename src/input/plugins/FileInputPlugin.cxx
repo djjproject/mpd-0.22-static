@@ -35,8 +35,8 @@ class FileInputStream final : public InputStream {
 
 public:
 	FileInputStream(const char *path, FileReader &&_reader, off_t _size,
-			Mutex &_mutex, Cond &_cond)
-		:InputStream(path, _mutex, _cond),
+			Mutex &_mutex)
+		:InputStream(path, _mutex),
 		 reader(std::move(_reader)) {
 		size = _size;
 		seekable = true;
@@ -54,8 +54,7 @@ public:
 };
 
 InputStreamPtr
-OpenFileInputStream(Path path,
-		    Mutex &mutex, Cond &cond)
+OpenFileInputStream(Path path, Mutex &mutex)
 {
 	FileReader reader(path);
 
@@ -65,17 +64,14 @@ OpenFileInputStream(Path path,
 		throw FormatRuntimeError("Not a regular file: %s",
 					 path.c_str());
 
-#if !defined(__BIONIC__) || __ANDROID_API__ >= 21
-	/* posix_fadvise() requires Android API 21 */
 #ifdef POSIX_FADV_SEQUENTIAL
 	posix_fadvise(reader.GetFD().Get(), (off_t)0, info.GetSize(),
 		      POSIX_FADV_SEQUENTIAL);
 #endif
-#endif
 
-	return std::make_unique<FileInputStream>(path.ToUTF8().c_str(),
+	return std::make_unique<FileInputStream>(path.ToUTF8Throw().c_str(),
 						 std::move(reader), info.GetSize(),
-						 mutex, cond);
+						 mutex);
 }
 
 void
