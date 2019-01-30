@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,7 +22,7 @@
 
 #include "Page.hxx"
 #include "event/BufferedSocket.hxx"
-#include "Compiler.h"
+#include "util/Compiler.h"
 
 #include <boost/intrusive/link_mode.hpp>
 #include <boost/intrusive/list_hook.hpp>
@@ -98,8 +98,11 @@ class HttpdClient final
 
 	/**
 	 * If the current metadata was already sent to the client.
+	 *
+	 * Initialized to `true` because there is no metadata #Page
+	 * pending to be sent.
 	 */
-	bool metadata_sent = false;
+	bool metadata_sent = true;
 
 	/**
 	 * The amount of streaming data between each metadata block
@@ -135,55 +138,56 @@ public:
 	 * Note: this does not remove the client from the
 	 * #HttpdOutput object.
 	 */
-	~HttpdClient();
+	~HttpdClient() noexcept;
 
 	/**
 	 * Frees the client and removes it from the server's client list.
 	 */
-	void Close();
+	void Close() noexcept;
 
-	void LockClose();
+	void LockClose() noexcept;
 
 	/**
 	 * Clears the page queue.
 	 */
-	void CancelQueue();
+	void CancelQueue() noexcept;
 
 	/**
 	 * Handle a line of the HTTP request.
 	 */
-	bool HandleLine(const char *line);
+	bool HandleLine(const char *line) noexcept;
 
 	/**
 	 * Switch the client to #State::RESPONSE.
 	 */
-	void BeginResponse();
+	void BeginResponse() noexcept;
 
 	/**
 	 * Sends the status line and response headers to the client.
 	 */
-	bool SendResponse();
+	bool SendResponse() noexcept;
 
 	gcc_pure
 	ssize_t GetBytesTillMetaData() const noexcept;
 
-	ssize_t TryWritePage(const Page &page, size_t position);
-	ssize_t TryWritePageN(const Page &page, size_t position, ssize_t n);
+	ssize_t TryWritePage(const Page &page, size_t position) noexcept;
+	ssize_t TryWritePageN(const Page &page,
+			      size_t position, ssize_t n) noexcept;
 
-	bool TryWrite();
+	bool TryWrite() noexcept;
 
 	/**
 	 * Appends a page to the client's queue.
 	 */
-	void PushPage(PagePtr page);
+	void PushPage(PagePtr page) noexcept;
 
 	/**
 	 * Sends the passed metadata.
 	 */
-	void PushMetaData(PagePtr page);
+	void PushMetaData(PagePtr page) noexcept;
 
 private:
-	void ClearQueue();
+	void ClearQueue() noexcept;
 
 protected:
 	/* virtual methods from class SocketMonitor */

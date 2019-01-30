@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -35,10 +35,6 @@
 #include <sys/socket.h>
 #endif
 
-#ifdef HAVE_LIBWRAP
-#include <tcpd.h>
-#endif
-
 static constexpr char GREETING[] = "OK MPD " PROTOCOL_VERSION "\n";
 
 Client::Client(EventLoop &_loop, Partition &_partition,
@@ -65,27 +61,6 @@ client_new(EventLoop &loop, Partition &partition,
 	const auto remote = ToString(address);
 
 	assert(fd.IsDefined());
-
-#ifdef HAVE_LIBWRAP
-	if (address.GetFamily() != AF_LOCAL) {
-		// TODO: shall we obtain the program name from argv[0]?
-		const char *progname = "mpd";
-
-		struct request_info req;
-		request_init(&req, RQ_FILE, fd.Get(), RQ_DAEMON, progname, 0);
-
-		fromhost(&req);
-
-		if (!hosts_access(&req)) {
-			/* tcp wrappers says no */
-			FormatWarning(client_domain,
-				      "libwrap refused connection (libwrap=%s) from %s",
-				      progname, remote.c_str());
-
-			return;
-		}
-	}
-#endif	/* HAVE_WRAP */
 
 	ClientList &client_list = *partition.instance.client_list;
 	if (client_list.IsFull()) {

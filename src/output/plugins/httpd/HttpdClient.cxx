@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,7 +17,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "config.h"
 #include "HttpdClient.hxx"
 #include "HttpdInternal.hxx"
 #include "util/ASCII.hxx"
@@ -32,27 +31,27 @@
 #include <string.h>
 #include <stdio.h>
 
-HttpdClient::~HttpdClient()
+HttpdClient::~HttpdClient() noexcept
 {
 	if (IsDefined())
 		BufferedSocket::Close();
 }
 
 void
-HttpdClient::Close()
+HttpdClient::Close() noexcept
 {
 	httpd.RemoveClient(*this);
 }
 
 void
-HttpdClient::LockClose()
+HttpdClient::LockClose() noexcept
 {
 	const std::lock_guard<Mutex> protect(httpd.mutex);
 	Close();
 }
 
 void
-HttpdClient::BeginResponse()
+HttpdClient::BeginResponse() noexcept
 {
 	assert(state != State::RESPONSE);
 
@@ -67,7 +66,7 @@ HttpdClient::BeginResponse()
  * Handle a line of the HTTP request.
  */
 bool
-HttpdClient::HandleLine(const char *line)
+HttpdClient::HandleLine(const char *line) noexcept
 {
 	assert(state != State::RESPONSE);
 
@@ -122,7 +121,7 @@ HttpdClient::HandleLine(const char *line)
  * Sends the status line and response headers to the client.
  */
 bool
-HttpdClient::SendResponse()
+HttpdClient::SendResponse() noexcept
 {
 	char buffer[1024];
 	AllocatedString<> allocated = nullptr;
@@ -172,7 +171,7 @@ HttpdClient::HttpdClient(HttpdOutput &_httpd, UniqueSocketDescriptor _fd,
 }
 
 void
-HttpdClient::ClearQueue()
+HttpdClient::ClearQueue() noexcept
 {
 	assert(state == State::RESPONSE);
 
@@ -190,7 +189,7 @@ HttpdClient::ClearQueue()
 }
 
 void
-HttpdClient::CancelQueue()
+HttpdClient::CancelQueue() noexcept
 {
 	if (state != State::RESPONSE)
 		return;
@@ -202,7 +201,7 @@ HttpdClient::CancelQueue()
 }
 
 ssize_t
-HttpdClient::TryWritePage(const Page &page, size_t position)
+HttpdClient::TryWritePage(const Page &page, size_t position) noexcept
 {
 	assert(position < page.GetSize());
 
@@ -211,7 +210,8 @@ HttpdClient::TryWritePage(const Page &page, size_t position)
 }
 
 ssize_t
-HttpdClient::TryWritePageN(const Page &page, size_t position, ssize_t n)
+HttpdClient::TryWritePageN(const Page &page,
+			   size_t position, ssize_t n) noexcept
 {
 	return n >= 0
 		? GetSocket().Write(page.GetData() + position, n)
@@ -229,7 +229,7 @@ HttpdClient::GetBytesTillMetaData() const noexcept
 }
 
 inline bool
-HttpdClient::TryWrite()
+HttpdClient::TryWrite() noexcept
 {
 	const std::lock_guard<Mutex> protect(httpd.mutex);
 
@@ -343,7 +343,7 @@ HttpdClient::TryWrite()
 }
 
 void
-HttpdClient::PushPage(PagePtr page)
+HttpdClient::PushPage(PagePtr page) noexcept
 {
 	if (state != State::RESPONSE)
 		/* the client is still writing the HTTP request */
@@ -362,7 +362,7 @@ HttpdClient::PushPage(PagePtr page)
 }
 
 void
-HttpdClient::PushMetaData(PagePtr page)
+HttpdClient::PushMetaData(PagePtr page) noexcept
 {
 	assert(page != nullptr);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -29,9 +29,9 @@ template<typename T> class AllocatedString;
 AllocatedString<char>
 icy_server_metadata_header(const char *name,
 			   const char *genre, const char *url,
-			   const char *content_type, int metaint);
+			   const char *content_type, int metaint) noexcept;
 
 PagePtr
-icy_server_metadata_page(const Tag &tag, const TagType *types);
+icy_server_metadata_page(const Tag &tag, const TagType *types) noexcept;
 
 #endif

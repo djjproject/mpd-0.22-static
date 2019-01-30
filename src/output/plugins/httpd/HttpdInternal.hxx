@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2017 The Music Player Daemon Project
+ * Copyright 2003-2018 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -33,7 +33,7 @@
 #include "event/ServerSocket.hxx"
 #include "event/DeferEvent.hxx"
 #include "util/Cast.hxx"
-#include "Compiler.h"
+#include "util/Compiler.h"
 
 #include <boost/intrusive/list.hpp>
 
@@ -162,7 +162,7 @@ public:
 	using ServerSocket::GetEventLoop;
 
 	void Bind();
-	void Unbind();
+	void Unbind() noexcept;
 
 	void Enable() override {
 		Bind();
@@ -208,18 +208,18 @@ public:
 		return HasClients();
 	}
 
-	void AddClient(UniqueSocketDescriptor fd);
+	void AddClient(UniqueSocketDescriptor fd) noexcept;
 
 	/**
 	 * Removes a client from the httpd_output.clients linked list.
 	 */
-	void RemoveClient(HttpdClient &client);
+	void RemoveClient(HttpdClient &client) noexcept;
 
 	/**
 	 * Sends the encoder header to the client.  This is called
 	 * right after the response headers have been sent.
 	 */
-	void SendHeader(HttpdClient &client) const;
+	void SendHeader(HttpdClient &client) const noexcept;
 
 	gcc_pure
 	std::chrono::steady_clock::duration Delay() const noexcept override;
@@ -235,7 +235,7 @@ public:
 	 *
 	 * Mutext must not be locked.
 	 */
-	void BroadcastPage(PagePtr page);
+	void BroadcastPage(PagePtr page) noexcept;
 
 	/**
 	 * Broadcasts data from the encoder to all clients.
@@ -251,7 +251,7 @@ public:
 
 	size_t Play(const void *chunk, size_t size) override;
 
-	void CancelAllClients();
+	void CancelAllClients() noexcept;
 
 	void Cancel() noexcept override;
 	bool Pause() override;
@@ -261,7 +261,7 @@ private:
 	void OnDeferredBroadcast() noexcept;
 
 	void OnAccept(UniqueSocketDescriptor fd,
-		      SocketAddress address, int uid) override;
+		      SocketAddress address, int uid) noexcept override;
 };
 
 extern const class Domain httpd_output_domain;

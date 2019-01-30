@@ -1,6 +1,6 @@
 /*
 * MPD SACD Decoder plugin
-* Copyright (c) 2011-2017 Maxim V.Anisiutkin <maxim.anisiutkin@gmail.com>
+* Copyright (c) 2011-2019 Maxim V.Anisiutkin <maxim.anisiutkin@gmail.com>
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
@@ -126,9 +126,8 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 			if (!(sacd_media->read(&id, sizeof(id)) == sizeof(id) && id.has_id("SND "))) {
 				return false;
 			}
-			uint64_t id_prop_size = ck.get_size() - sizeof(id);
-			uint64_t id_prop_read = 0;
-			while (id_prop_read < id_prop_size) {
+			int64_t id_prop_end = sacd_media->get_position() - sizeof(id) + ck.get_size();
+			while (sacd_media->get_position() < id_prop_end) {
 				if (!(sacd_media->read(&ck, sizeof(ck)) == sizeof(ck))) {
 					return false;
 				}
@@ -181,14 +180,12 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 				else if (ck.has_id("ID3 ")) {
 					t_old.index  = 0;
 					t_old.offset = sacd_media->get_position();
-					t_old.size   = ck.get_size();
-					t_old.data.resize((uint32_t)ck.get_size());
-					sacd_media->read(t_old.data.data(), t_old.data.size());
+					t_old.tag_value.resize((uint32_t)ck.get_size());
+					sacd_media->read(t_old.tag_value.data(), t_old.tag_value.size());
 				}
 				else {
 					sacd_media->skip(ck.get_size());
 				}
-				id_prop_read += sizeof(ck) + ck.get_size() + (ck.get_size() & 1);
 				sacd_media->skip(sacd_media->get_position() & 1);
 			}
 		}
@@ -235,9 +232,8 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 			sacd_media->skip(ck.get_size());
 		}
 		else if (ck.has_id("DIIN") && !skip_emaster_chunks) {
-			uint64_t id_diin_size = ck.get_size();
-			uint64_t id_diin_read = 0;
-			while (id_diin_read < id_diin_size) {
+			int64_t id_diin_end = sacd_media->get_position() + ck.get_size();
+			while (sacd_media->get_position() < id_diin_end) {
 				if (!(sacd_media->read(&ck, sizeof(ck)) == sizeof(ck))) {
 					return false;
 				}
@@ -282,7 +278,6 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 				else {
 					sacd_media->skip(ck.get_size());
 				}
-				id_diin_read += sizeof(ck) + ck.get_size();
 				sacd_media->skip(sacd_media->get_position() & 1);
 			}
 		}
@@ -291,9 +286,8 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 			id3tags_t t;
 			t.index  = id3tags.size();
 			t.offset = sacd_media->get_position();
-			t.size   = ck.get_size();
-			t.data.resize((uint32_t)ck.get_size());
-			sacd_media->read(t.data.data(), t.data.size());
+			t.tag_value.resize((uint32_t)ck.get_size());
+			sacd_media->read(t.tag_value.data(), t.tag_value.size());
 			id3tags.push_back(t);
 		}
 		else {
@@ -302,7 +296,7 @@ bool sacd_dsdiff_t::open(sacd_media_t* _sacd_media, open_mode_e _mode) {
 		sacd_media->skip(sacd_media->get_position() & 1);
 	}
 	if (id3tags.size() == 0) {
-		if (t_old.size > 0) {
+		if (t_old.tag_value.size() > 0) {
 			id3tags.push_back(t_old);
 		}
 	}
@@ -460,10 +454,10 @@ uint64_t sacd_dsdiff_t::get_dsti_for_frame(uint32_t frame_nr) {
 
 void sacd_dsdiff_t::get_id3tags(uint32_t _track_index, TagHandler& handler) {
 #ifdef ENABLE_ID3TAG
-	if (id3tags[_track_index].size > 0) {
-		id3_byte_t* dsdid3 = (id3_byte_t*)&id3tags[_track_index].data[0];
-		const id3_length_t count = id3tags[_track_index].size;
-		struct id3_tag* id3_tag = id3_tag_parse(dsdid3, count);
+	id3_byte_t* tag_value = static_cast<id3_byte_t*>(id3tags[_track_index].tag_value.data());
+	id3_length_t tag_size = static_cast<id3_length_t>(id3tags[_track_index].tag_value.size());
+	if (tag_size > 0 && tag_value) {
+		struct id3_tag* id3_tag = id3_tag_parse(tag_value, tag_size);
 		if (id3_tag != nullptr) {
 			if ((mode & MODE_SINGLE_TRACK) == MODE_SINGLE_TRACK) {
 				//scan_id3_tag(id3_tag, handler, handler_ctx);
