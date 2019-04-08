@@ -87,6 +87,22 @@ Mount file systems (e.g. USB sticks or other removable media) using
 the udisks2 daemon via D-Bus.  To obtain a valid udisks2 URI, consult
 :ref:`the according neighbor plugin <neighbor_plugin>`.
 
+It might be necessary to grant :program:`MPD` privileges to control
+:program:`udisks2` through :program:`policykit`.  To do this, create a
+file called :file:`/usr/share/polkit-1/rules.d/mpd-udisks.rules` with
+the following text::
+
+ polkit.addRule(function(action, subject) {
+   if ((action.id == "org.freedesktop.udisks2.filesystem-mount" ||
+        action.id == "org.freedesktop.udisks2.filesystem-mount-other-seat") &&
+       subject.user == "mpd") {
+       return polkit.Result.YES;
+   }
+ });
+
+If you run MPD as a different user, change ``mpd`` to the name of your
+MPD user.
+
 .. _neighbor_plugin:
 
 Neighbor plugins
@@ -114,15 +130,39 @@ Input plugins
 alsa
 ~~~~
 
-Allows :program:`MPD` on Linux to play audio directly from a soundcard using the scheme alsa://. Audio is formatted as 44.1 kHz 16-bit stereo (CD format). Examples:
+Allows :program:`MPD` on Linux to play audio directly from a soundcard using the scheme alsa://. Audio is by default formatted as 48 kHz 16-bit stereo, but this default can be overidden by a config file setting or by the URI. Examples:
 
 .. code-block:: none
 
-    mpc add alsa:// plays audio from device hw:0,0
+    mpc add alsa:// plays audio from device default
 
 .. code-block:: none
 
-    mpc add alsa://hw:1,0 plays audio from device hw:1,0 cdio_paranoia
+    mpc add alsa://hw:1,0 plays audio from device hw:1,0
+
+.. code-block:: none
+
+    mpc add alsa://hw:1,0?format=44100:16:2 plays audio from device hw:1,0 sampling 16-bit stereo at 44.1kHz.
+
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
+
+   * - Setting
+     - Description
+   * - **default_device NAME**
+     - The alsa device id to use to none is specified in the uri.
+   * - **default_format F**
+     - The sampling rate, size and channels to use. Wildcards are not allowed.
+
+       Example - "44100:16:2"
+
+   * - **auto_resample yes|no**
+     - If set to no, then libasound will not attempt to resample. In this case, the user is responsible for ensuring that the requested sample rate can be produced natively by the device, otherwise an error will occur.
+   * - **auto_channels yes|no**
+     - If set to no, then libasound will not attempt to convert between different channel numbers. The user must ensure that the device supports the requested channels when sampling.
+   * - **auto_format yes|no**
+     - If set to no, then libasound will not attempt to convert between different sample formats (16 bit, 24 bit, floating point, ...). Again the user must ensure that the requested format is available natively from the device.
 
 cdio_paranoia
 ~~~~~~~~~~~~~
@@ -674,6 +714,8 @@ Valid quality values for libsoxr:
 * "low"
 * "quick"
 
+.. _output_plugins:
+
 Output plugins
 --------------
 
@@ -784,6 +826,15 @@ The fifo plugin writes raw PCM data to a FIFO (First In, First Out) file. The da
    * - **path P**
      - This specifies the path of the FIFO to write to. Must be an absolute path. If the path does not exist, it will be created when MPD is started, and removed when MPD is stopped. The FIFO will be created with the same user and group as MPD is running as. Default permissions can be modified by using the builtin shell command umask. If a FIFO already exists at the specified path it will be reused, and will not be removed when MPD is stopped. You can use the "mkfifo" command to create this, and then you may modify the permissions to your liking.
 
+haiku
+~~~~~
+
+Use the SoundPlayer API on the Haiku operating system.
+
+This plugin is unmaintained and contains known bugs.  It will be
+removed soon, unless there is a new maintainer.
+
+
 jack
 ~~~~
 The jack plugin connects to a `JACK server <http://jackaudio.org/>`_.
@@ -822,7 +873,7 @@ It is highly recommended to configure a fixed format, because a stream cannot sw
    * - **port P**
      - Binds the HTTP server to the specified port.
    * - **bind_to_address ADDR**
-     - Binds the HTTP server to the specified address (IPv4, IPv6 or UNIX socket). Multiple addresses in parallel are not supported.
+     - Binds the HTTP server to the specified address (IPv4, IPv6 or local socket). Multiple addresses in parallel are not supported.
    * - **encoder NAME**
      - Chooses an encoder plugin. A list of encoder plugins can be found in the encoder plugin reference :ref:`encoder_plugins`.
    * - **max_clients MC**
@@ -935,6 +986,8 @@ The pulse plugin connects to a `PulseAudio <http://www.freedesktop.org/wiki/Soft
      - Sets the host name of the PulseAudio server. By default, :program:`MPD` connects to the local PulseAudio server.
    * - **sink NAME**
      - Specifies the name of the PulseAudio sink :program:`MPD` should play on.
+   * - **scale_volume FACTOR**
+     - Specifies a linear scaling coefficient (ranging from 0.5 to 5.0) to apply when adjusting volume through :program:`MPD`.  For example, chosing a factor equal to ``"0.7"`` means that setting the volume to 100 in :program:`MPD` will set the PulseAudio volume to 70%, and a factor equal to ``"3.5"`` means that volume 100 in :program:`MPD` corresponds to a 350% PulseAudio volume.
 
 recorder
 ~~~~~~~~
@@ -974,6 +1027,8 @@ You must set a format.
      - Set the timeout for the shout connection in seconds. Defaults to 2 seconds.
    * - **protocol icecast2|icecast1|shoutcast**
      - Specifies the protocol that wil be used to connect to the server. The default is "icecast2".
+   * - **tls disabled|auto|auto_no_plain|rfc2818|rfc2817**
+     - Specifies what kind of TLS to use. The default is "disabled" (no TLS).
    * - **mount URI**
      - Mounts the :program:`MPD` stream in the specified URI.
    * - **user USERNAME**
@@ -1017,8 +1072,69 @@ The "Solaris" plugin runs only on SUN Solaris, and plays via /dev/audio.
    * - **device PATH**
      - Sets the path of the audio device, defaults to /dev/audio.
 
+
+.. _filter_plugins:
+
+Filter plugins
+--------------
+
+ffmpeg
+~~~~~~
+
+Configures a FFmpeg filter graph.
+
+This plugin requires building with ``libavfilter`` (FFmpeg).
+
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
+
+   * - Setting
+     - Description
+   * - **graph "..."**
+     - Specifies the ``libavfilter`` graph; read the `FFmpeg
+       documentation
+       <https://libav.org/documentation/libavfilter.html#Filtergraph-syntax-1>`_
+       for details
+
+
+hdcd
+~~~~
+
+Decode `HDCD
+<https://en.wikipedia.org/wiki/High_Definition_Compatible_Digital>`_.
+
+This plugin requires building with ``libavfilter`` (FFmpeg).
+
+normalize
+~~~~~~~~~
+
+Normalize the volume during playback (at the expensve of quality).
+
+
+null
+~~~~
+
+A no-op filter.  Audio data is returned as-is.
+
+
+route
+~~~~~
+
+Reroute channels.
+
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
+
+   * - Setting
+     - Description
+   * - **routes "0>0, 1>1, ..."**
+     - Specifies the channel mapping.
+
+
 .. _playlist_plugins:
-     
+
 Playlist plugins
 ----------------
 

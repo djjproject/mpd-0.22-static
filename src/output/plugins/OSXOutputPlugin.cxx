@@ -29,7 +29,7 @@
 #include "pcm/PcmExport.hxx"
 #include "thread/Mutex.hxx"
 #include "thread/Cond.hxx"
-#include "system/ByteOrder.hxx"
+#include "util/ByteOrder.hxx"
 #include "util/StringBuffer.hxx"
 #include "util/StringFormat.hxx"
 #include "Log.hxx"
@@ -637,11 +637,8 @@ osx_output_set_device(OSXOutput *oo)
 		}
 	}
 	if (i == numdevices) {
-		FormatWarning(osx_output_domain,
-			      "Found no audio device with name '%s' "
-			      "(will use default audio device)",
+                throw FormatRuntimeError("Found no audio device with name '%s' ",
 			      oo->device_name);
-		return;
 	}
 
 	status = AudioUnitSetProperty(oo->au,

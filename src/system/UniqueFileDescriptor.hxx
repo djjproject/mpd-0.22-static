@@ -60,7 +60,8 @@ public:
 	}
 
 	UniqueFileDescriptor &operator=(UniqueFileDescriptor &&other) noexcept {
-		std::swap(fd, other.fd);
+		using std::swap;
+		swap(fd, other.fd);
 		return *this;
 	}
 
@@ -76,6 +77,11 @@ public:
 #ifndef _WIN32
 	static bool CreatePipe(UniqueFileDescriptor &r, UniqueFileDescriptor &w) noexcept {
 		return FileDescriptor::CreatePipe(r, w);
+	}
+
+	static bool CreatePipeNonBlock(UniqueFileDescriptor &r,
+				       UniqueFileDescriptor &w) noexcept {
+		return FileDescriptor::CreatePipeNonBlock(r, w);
 	}
 
 	static bool CreatePipe(FileDescriptor &r, FileDescriptor &w) noexcept;

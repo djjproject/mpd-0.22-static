@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017 Max Kellermann <max.kellermann@gmail.com>
+ * Copyright 2012-2019 Max Kellermann <max.kellermann@gmail.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,7 +31,7 @@
 #define IPV4_ADDRESS_HXX
 
 #include "SocketAddress.hxx"
-#include "system/ByteOrder.hxx"
+#include "util/ByteOrder.hxx"
 
 #include <stdint.h>
 
@@ -51,7 +51,12 @@ class IPv4Address {
 #ifdef _WIN32
 	static constexpr struct in_addr ConstructInAddr(uint8_t a, uint8_t b,
 							uint8_t c, uint8_t d) noexcept {
-		return {{{ a, b, c, d }}};
+		struct in_addr result{};
+		result.s_net = a;
+		result.s_host = b;
+		result.s_lh = c;
+		result.s_impno = d;
+		return result;
 	}
 #else
 
@@ -66,7 +71,7 @@ class IPv4Address {
 
 	static constexpr struct in_addr ConstructInAddr(uint8_t a, uint8_t b,
 							uint8_t c, uint8_t d) noexcept {
-		return { ConstructInAddrT(a, b, c, d) };
+		return ConstructInAddrBE(ConstructInAddrT(a, b, c, d));
 	}
 #endif
 
@@ -158,7 +163,7 @@ public:
 	 */
 	static constexpr const IPv4Address &Cast(const SocketAddress &src) noexcept {
 		/* this reinterpret_cast works because this class is
-		   just a wrapper for struct sockaddr_in6 */
+		   just a wrapper for struct sockaddr_in */
 		return *(const IPv4Address *)(const void *)src.GetAddress();
 	}
 

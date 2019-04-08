@@ -1,6 +1,24 @@
 libflac_dep = dependency('flac', version: '>= 1.2', required: get_option('flac'))
 libopus_dep = dependency('opus', required: get_option('opus'))
-libvorbis_dep = dependency('vorbis', required: get_option('vorbis'))
+
+if get_option('tremor').enabled()
+  # no libvorbis if Tremor was explicitly enabled
+  libvorbis_dep = dependency('', required: false)
+else
+  libvorbis_dep = dependency('vorbis', required: get_option('vorbis'))
+endif
+
+if libvorbis_dep.found()
+  # no Tremor if libvorbis is used
+  libvorbisidec_dep = dependency('', required: false)
+else
+  # attempt to auto-detect Tremor only if libvorbis was disabled or not found
+  libvorbisidec_dep = dependency('vorbisidec', required: get_option('tremor'))
+endif
+
+if get_option('vorbis').enabled() and get_option('tremor').enabled()
+	error('Cannot build both, the Vorbis decoder AND the Tremor (Vorbis fixed-point) decoder')
+endif
 
 libvorbisenc_dep = dependency('', required: false)
 if need_encoder and not get_option('vorbisenc').disabled()
@@ -13,7 +31,7 @@ if need_encoder and not get_option('vorbisenc').disabled()
   endif
 endif
 
-if libopus_dep.found() or libvorbis_dep.found() or libvorbisenc_dep.found()
+if libopus_dep.found() or libvorbis_dep.found() or libvorbisenc_dep.found() or libvorbisidec_dep.found()
   libogg_dep = dependency('ogg')
 else
   libogg_dep = dependency('', required: false)
