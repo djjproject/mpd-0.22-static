@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2018 The Music Player Daemon Project
+ * Copyright 2003-2019 The Music Player Daemon Project
  * http://www.musicpd.org
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,6 +22,8 @@
 #include "Partition.hxx"
 #include "Idle.hxx"
 #include "Stats.hxx"
+#include "client/List.hxx"
+#include "input/cache/Manager.hxx"
 
 #ifdef ENABLE_CURL
 #include "RemoteTagCache.hxx"
@@ -34,8 +36,12 @@
 #include "db/update/Service.hxx"
 #include "storage/StorageInterface.hxx"
 
+#ifdef ENABLE_NEIGHBOR_PLUGINS
+#include "neighbor/Glue.hxx"
+#endif
+
 #ifdef ENABLE_SQLITE
-#include "sticker/StickerDatabase.hxx"
+#include "sticker/Database.hxx"
 #include "sticker/SongSticker.hxx"
 #endif
 #endif
@@ -88,7 +94,7 @@ Instance::GetDatabaseOrThrow() const
 }
 
 void
-Instance::OnDatabaseModified()
+Instance::OnDatabaseModified() noexcept
 {
 	assert(database != nullptr);
 
@@ -101,15 +107,15 @@ Instance::OnDatabaseModified()
 }
 
 void
-Instance::OnDatabaseSongRemoved(const char *uri)
+Instance::OnDatabaseSongRemoved(const char *uri) noexcept
 {
 	assert(database != nullptr);
 
 #ifdef ENABLE_SQLITE
 	/* if the song has a sticker, remove it */
-	if (sticker_enabled()) {
+	if (HasStickerDatabase()) {
 		try {
-			sticker_song_delete(uri);
+			sticker_song_delete(*sticker_database, uri);
 		} catch (...) {
 		}
 	}

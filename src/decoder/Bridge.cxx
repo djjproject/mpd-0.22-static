@@ -30,6 +30,10 @@
 #include "tag/Tag.hxx"
 #include "Log.hxx"
 #include "input/InputStream.hxx"
+#include "input/LocalOpen.hxx"
+#include "input/cache/Manager.hxx"
+#include "input/cache/Stream.hxx"
+#include "fs/Path.hxx"
 #include "util/ConstBuffer.hxx"
 #include "util/StringBuffer.hxx"
 
@@ -37,15 +41,32 @@
 #include <string.h>
 #include <math.h>
 
-DecoderBridge::~DecoderBridge()
+DecoderBridge::DecoderBridge(DecoderControl &_dc, bool _initial_seek_pending,
+			     std::unique_ptr<Tag> _tag) noexcept
+	:dc(_dc),
+	 initial_seek_pending(_initial_seek_pending),
+	 song_tag(std::move(_tag)) {}
+
+DecoderBridge::~DecoderBridge() noexcept
 {
 	/* caller must flush the chunk */
 	assert(current_chunk == nullptr);
+}
 
-	if (convert != nullptr) {
-		convert->Close();
-		delete convert;
+InputStreamPtr
+DecoderBridge::OpenLocal(Path path_fs, const char *uri_utf8)
+{
+	if (dc.input_cache != nullptr) {
+		auto lease = dc.input_cache->Get(uri_utf8, true);
+		if (lease) {
+			auto is = std::make_unique<CacheInputStream>(std::move(lease),
+								     dc.mutex);
+			is->SetHandler(&dc);
+			return is;
+		}
 	}
+
+	return OpenLocalInputStream(path_fs, dc.mutex);
 }
 
 bool
@@ -73,10 +94,10 @@ DecoderBridge::CheckCancelRead() const noexcept
  * one.
  */
 static DecoderCommand
-need_chunks(DecoderControl &dc) noexcept
+NeedChunks(DecoderControl &dc, std::unique_lock<Mutex> &lock) noexcept
 {
 	if (dc.command == DecoderCommand::NONE)
-		dc.Wait();
+		dc.Wait(lock);
 
 	return dc.command;
 }
@@ -84,8 +105,8 @@ need_chunks(DecoderControl &dc) noexcept
 static DecoderCommand
 LockNeedChunks(DecoderControl &dc) noexcept
 {
-	const std::lock_guard<Mutex> protect(dc.mutex);
-	return need_chunks(dc);
+	std::unique_lock<Mutex> lock(dc.mutex);
+	return NeedChunks(dc, lock);
 }
 
 MusicChunk *
@@ -113,7 +134,7 @@ DecoderBridge::GetChunk() noexcept
 }
 
 void
-DecoderBridge::FlushChunk()
+DecoderBridge::FlushChunk() noexcept
 {
 	assert(!seeking);
 	assert(!initial_seek_running);
@@ -126,11 +147,11 @@ DecoderBridge::FlushChunk()
 
 	const std::lock_guard<Mutex> protect(dc.mutex);
 	if (dc.client_is_waiting)
-		dc.client_cond.signal();
+		dc.client_cond.notify_one();
 }
 
 bool
-DecoderBridge::PrepareInitialSeek()
+DecoderBridge::PrepareInitialSeek() noexcept
 {
 	assert(dc.pipe != nullptr);
 
@@ -192,7 +213,7 @@ DecoderBridge::LockGetVirtualCommand() noexcept
 }
 
 DecoderCommand
-DecoderBridge::DoSendTag(const Tag &tag)
+DecoderBridge::DoSendTag(const Tag &tag) noexcept
 {
 	if (current_chunk != nullptr) {
 		/* there is a partial chunk - flush it, we want the
@@ -213,7 +234,7 @@ DecoderBridge::DoSendTag(const Tag &tag)
 }
 
 bool
-DecoderBridge::UpdateStreamTag(InputStream *is)
+DecoderBridge::UpdateStreamTag(InputStream *is) noexcept
 {
 	auto tag = is != nullptr
 		? is->LockReadTag()
@@ -255,11 +276,9 @@ DecoderBridge::Ready(const AudioFormat audio_format,
 		FormatDebug(decoder_domain, "converting to %s",
 			    ToString(dc.out_audio_format).c_str());
 
-		convert = new PcmConvert();
-
 		try {
-			convert->Open(dc.in_audio_format,
-					      dc.out_audio_format);
+			convert = std::make_unique<PcmConvert>(dc.in_audio_format,
+							       dc.out_audio_format);
 		} catch (...) {
 			error = std::current_exception();
 		}
@@ -273,7 +292,7 @@ DecoderBridge::GetCommand() noexcept
 }
 
 void
-DecoderBridge::CommandFinished()
+DecoderBridge::CommandFinished() noexcept
 {
 	const std::lock_guard<Mutex> protect(dc.mutex);
 
@@ -311,7 +330,7 @@ DecoderBridge::CommandFinished()
 	}
 
 	dc.command = DecoderCommand::NONE;
-	dc.client_cond.signal();
+	dc.client_cond.notify_one();
 }
 
 SongTime
@@ -336,7 +355,7 @@ DecoderBridge::GetSeekFrame() noexcept
 }
 
 void
-DecoderBridge::SeekError()
+DecoderBridge::SeekError() noexcept
 {
 	assert(dc.pipe != nullptr);
 
@@ -367,16 +386,18 @@ DecoderBridge::OpenUri(const char *uri)
 	auto is = InputStream::Open(uri, mutex);
 	is->SetHandler(&dc);
 
-	const std::lock_guard<Mutex> lock(mutex);
+	std::unique_lock<Mutex> lock(mutex);
 	while (true) {
-		is->Update();
-		if (is->IsReady())
-			return is;
-
 		if (dc.command == DecoderCommand::STOP)
 			throw StopDecoder();
 
-		cond.wait(mutex);
+		is->Update();
+		if (is->IsReady()) {
+			is->Check();
+			return is;
+		}
+
+		cond.wait(lock);
 	}
 }
 
@@ -390,7 +411,7 @@ try {
 	if (length == 0)
 		return 0;
 
-	std::lock_guard<Mutex> lock(is.mutex);
+	std::unique_lock<Mutex> lock(is.mutex);
 
 	while (true) {
 		if (CheckCancelRead())
@@ -399,10 +420,10 @@ try {
 		if (is.IsAvailable())
 			break;
 
-		dc.cond.wait(is.mutex);
+		dc.cond.wait(lock);
 	}
 
-	size_t nbytes = is.Read(buffer, length);
+	size_t nbytes = is.Read(lock, buffer, length);
 	assert(nbytes > 0 || is.IsEOF());
 
 	return nbytes;
@@ -412,7 +433,7 @@ try {
 }
 
 void
-DecoderBridge::SubmitTimestamp(FloatDuration t)
+DecoderBridge::SubmitTimestamp(FloatDuration t) noexcept
 {
 	assert(t.count() >= 0);
 
@@ -423,7 +444,7 @@ DecoderBridge::SubmitTimestamp(FloatDuration t)
 DecoderCommand
 DecoderBridge::SubmitData(InputStream *is,
 			  const void *data, size_t length,
-			  uint16_t kbit_rate)
+			  uint16_t kbit_rate) noexcept
 {
 	assert(dc.state == DecoderState::DECODE);
 	assert(dc.pipe != nullptr);
@@ -540,7 +561,7 @@ DecoderBridge::SubmitData(InputStream *is,
 }
 
 DecoderCommand
-DecoderBridge::SubmitTag(InputStream *is, Tag &&tag)
+DecoderBridge::SubmitTag(InputStream *is, Tag &&tag) noexcept
 {
 	DecoderCommand cmd;
 
@@ -576,7 +597,7 @@ DecoderBridge::SubmitTag(InputStream *is, Tag &&tag)
 }
 
 void
-DecoderBridge::SubmitReplayGain(const ReplayGainInfo *new_replay_gain_info)
+DecoderBridge::SubmitReplayGain(const ReplayGainInfo *new_replay_gain_info) noexcept
 {
 	if (new_replay_gain_info != nullptr) {
 		static unsigned serial;
@@ -608,7 +629,7 @@ DecoderBridge::SubmitReplayGain(const ReplayGainInfo *new_replay_gain_info)
 }
 
 void
-DecoderBridge::SubmitMixRamp(MixRampInfo &&mix_ramp)
+DecoderBridge::SubmitMixRamp(MixRampInfo &&mix_ramp) noexcept
 {
 	dc.SetMixRamp(std::move(mix_ramp));
 }

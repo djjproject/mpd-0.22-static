@@ -33,7 +33,9 @@
 #include "TagFile.hxx"
 #include "fs/Traits.hxx"
 #include "fs/AllocatedPath.hxx"
-#include "util/ASCII.hxx"
+#include "util/StringView.hxx"
+
+#include <memory>
 
 #include <string.h>
 
@@ -56,18 +58,10 @@ public:
 	 */
 	char *next;
 
-	CueParser *parser;
+	std::unique_ptr<CueParser> parser;
 
 public:
-	EmbeddedCuePlaylist()
-		:parser(nullptr) {
-	}
-
-	virtual ~EmbeddedCuePlaylist() {
-		delete parser;
-	}
-
-	virtual std::unique_ptr<DetachedSong> NextSong() override;
+	std::unique_ptr<DetachedSong> NextSong() override;
 };
 
 class ExtractCuesheetTagHandler final : public NullTagHandler {
@@ -76,15 +70,14 @@ public:
 
 	ExtractCuesheetTagHandler() noexcept:NullTagHandler(WANT_PAIR) {}
 
-	void OnPair(const char *key, const char *value) noexcept override;
+	void OnPair(StringView key, StringView value) noexcept override;
 };
 
 void
-ExtractCuesheetTagHandler::OnPair(const char *name, const char *value) noexcept
+ExtractCuesheetTagHandler::OnPair(StringView name, StringView value) noexcept
 {
-	if (cuesheet.empty() &&
-	    StringEqualsCaseASCII(name, "cuesheet"))
-		cuesheet = value;
+	if (cuesheet.empty() && name.EqualsIgnoreCase("cuesheet"))
+		cuesheet = {value.data, value.size};
 }
 
 static std::unique_ptr<SongEnumerator>
@@ -113,7 +106,7 @@ embcue_playlist_open_uri(const char *uri,
 	playlist->cuesheet = std::move(extract_cuesheet.cuesheet);
 
 	playlist->next = &playlist->cuesheet[0];
-	playlist->parser = new CueParser();
+	playlist->parser = std::make_unique<CueParser>();
 
 	return playlist;
 }

@@ -22,13 +22,12 @@
 #include "lib/smbclient/Mutex.hxx"
 #include "../InputStream.hxx"
 #include "../InputPlugin.hxx"
+#include "../MaybeBufferedInputStream.hxx"
 #include "PluginUnavailable.hxx"
 #include "system/Error.hxx"
 #include "util/ASCII.hxx"
 
 #include <libsmbclient.h>
-
-#include <stdexcept>
 
 class SmbclientInputStream final : public InputStream {
 	SMBCCTX *ctx;
@@ -46,20 +45,20 @@ public:
 	}
 
 	~SmbclientInputStream() {
-		smbclient_mutex.lock();
+		const std::lock_guard<Mutex> lock(smbclient_mutex);
 		smbc_close(fd);
 		smbc_free_context(ctx, 1);
-		smbclient_mutex.unlock();
 	}
 
 	/* virtual methods from InputStream */
 
-	bool IsEOF() noexcept override {
+	bool IsEOF() const noexcept override {
 		return offset >= size;
 	}
 
-	size_t Read(void *ptr, size_t size) override;
-	void Seek(offset_type offset) override;
+	size_t Read(std::unique_lock<Mutex> &lock,
+		    void *ptr, size_t size) override;
+	void Seek(std::unique_lock<Mutex> &lock, offset_type offset) override;
 };
 
 /*
@@ -72,9 +71,8 @@ input_smbclient_init(EventLoop &, const ConfigBlock &)
 {
 	try {
 		SmbclientInit();
-	} catch (const std::runtime_error &e) {
-		// TODO: use std::throw_with_nested()?
-		throw PluginUnavailable(e.what());
+	} catch (...) {
+		std::throw_with_nested(PluginUnavailable("libsmbclient initialization failed"));
 	}
 
 	// TODO: create one global SMBCCTX here?
@@ -115,12 +113,14 @@ input_smbclient_open(const char *uri,
 		throw MakeErrno(e, "smbc_fstat() failed");
 	}
 
-	return std::make_unique<SmbclientInputStream>(uri, mutex,
-						      ctx, fd, st);
+	return std::make_unique<MaybeBufferedInputStream>
+		(std::make_unique<SmbclientInputStream>(uri, mutex,
+							ctx, fd, st));
 }
 
 size_t
-SmbclientInputStream::Read(void *ptr, size_t read_size)
+SmbclientInputStream::Read(std::unique_lock<Mutex> &,
+			   void *ptr, size_t read_size)
 {
 	ssize_t nbytes;
 
@@ -138,7 +138,8 @@ SmbclientInputStream::Read(void *ptr, size_t read_size)
 }
 
 void
-SmbclientInputStream::Seek(offset_type new_offset)
+SmbclientInputStream::Seek(std::unique_lock<Mutex> &,
+			   offset_type new_offset)
 {
 	off_t result;
 

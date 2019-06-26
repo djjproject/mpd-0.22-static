@@ -94,7 +94,7 @@ public:
 		}
 	}
 
-	EventLoop &GetEventLoop() noexcept {
+	EventLoop &GetEventLoop() const noexcept {
 		return defer_mount.GetEventLoop();
 	}
 
@@ -147,7 +147,7 @@ UdisksStorage::SetMountPoint(Path mount_point)
 
 	mount_error = {};
 	want_mount = false;
-	cond.broadcast();
+	cond.notify_all();
 }
 
 void
@@ -188,7 +188,7 @@ UdisksStorage::OnListReply(ODBus::Message reply) noexcept
 		const std::lock_guard<Mutex> lock(mutex);
 		mount_error = std::current_exception();
 		want_mount = false;
-		cond.broadcast();
+		cond.notify_all();
 		return;
 	}
 
@@ -198,7 +198,7 @@ UdisksStorage::OnListReply(ODBus::Message reply) noexcept
 void
 UdisksStorage::MountWait()
 {
-	const std::lock_guard<Mutex> lock(mutex);
+	std::unique_lock<Mutex> lock(mutex);
 
 	if (mounted_storage)
 		/* already mounted */
@@ -209,8 +209,7 @@ UdisksStorage::MountWait()
 		defer_mount.Schedule();
 	}
 
-	while (want_mount)
-		cond.wait(mutex);
+	cond.wait(lock, [this]{ return !want_mount; });
 
 	if (mount_error)
 		std::rethrow_exception(mount_error);
@@ -247,7 +246,7 @@ try {
 	const std::lock_guard<Mutex> lock(mutex);
 	mount_error = std::current_exception();
 	want_mount = false;
-	cond.broadcast();
+	cond.notify_all();
 }
 
 void
@@ -266,13 +265,13 @@ try {
 	const std::lock_guard<Mutex> lock(mutex);
 	mount_error = std::current_exception();
 	want_mount = false;
-	cond.broadcast();
+	cond.notify_all();
 }
 
 void
 UdisksStorage::UnmountWait()
 {
-	const std::lock_guard<Mutex> lock(mutex);
+	std::unique_lock<Mutex> lock(mutex);
 
 	if (!mounted_storage)
 		/* not mounted */
@@ -280,8 +279,7 @@ UdisksStorage::UnmountWait()
 
 	defer_unmount.Schedule();
 
-	while (mounted_storage)
-		cond.wait(mutex);
+	cond.wait(lock, [this]{ return !mounted_storage; });
 
 	if (mount_error)
 		std::rethrow_exception(mount_error);
@@ -306,7 +304,7 @@ try {
 	const std::lock_guard<Mutex> lock(mutex);
 	mount_error = std::current_exception();
 	mounted_storage.reset();
-	cond.broadcast();
+	cond.notify_all();
 }
 
 void
@@ -318,12 +316,12 @@ try {
 	const std::lock_guard<Mutex> lock(mutex);
 	mount_error = {};
 	mounted_storage.reset();
-	cond.broadcast();
+	cond.notify_all();
 } catch (...) {
 	const std::lock_guard<Mutex> lock(mutex);
 	mount_error = std::current_exception();
 	mounted_storage.reset();
-	cond.broadcast();
+	cond.notify_all();
 }
 
 std::string

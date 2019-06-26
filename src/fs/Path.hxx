@@ -39,7 +39,7 @@ class Path : public PathTraitsFS::Pointer {
 	using Traits = PathTraitsFS;
 	typedef Traits::Pointer Base;
 
-	constexpr Path(const_pointer_type _value):Base(_value) {}
+	constexpr Path(const_pointer_type _value) noexcept:Base(_value) {}
 
 public:
 	/**
@@ -48,7 +48,7 @@ public:
 	 *
 	 * @see IsNull()
 	 */
-	constexpr Path(std::nullptr_t):Base(nullptr) {}
+	constexpr Path(std::nullptr_t) noexcept:Base(nullptr) {}
 
 	/**
 	 * Copy a #Path object.
@@ -59,7 +59,7 @@ public:
 	 * Create a new instance pointing to the specified path
 	 * string.
 	 */
-	static constexpr Path FromFS(const_pointer_type fs) {
+	static constexpr Path FromFS(const_pointer_type fs) noexcept {
 		return Path(fs);
 	}
 
@@ -72,7 +72,7 @@ public:
 	 * Check if this is a "nulled" instance.  A "nulled" instance
 	 * must not be used.
 	 */
-	bool IsNull() const {
+	constexpr bool IsNull() const noexcept {
 		return Base::IsNull();
 	}
 
@@ -81,7 +81,7 @@ public:
 	 *
 	 * @see IsNull()
 	 */
-	void SetNull() {
+	void SetNull() noexcept {
 		*this = nullptr;
 	}
 
@@ -101,8 +101,7 @@ public:
 	 * pointer is invalidated whenever the value of life of this
 	 * instance ends.
 	 */
-	gcc_pure
-	const_pointer_type c_str() const noexcept {
+	constexpr const_pointer_type c_str() const noexcept {
 		return Base::c_str();
 	}
 
@@ -110,8 +109,7 @@ public:
 	 * Returns a pointer to the raw value, not necessarily
 	 * null-terminated.
 	 */
-	gcc_pure
-	const_pointer_type data() const noexcept {
+	constexpr const_pointer_type data() const noexcept {
 		return c_str();
 	}
 

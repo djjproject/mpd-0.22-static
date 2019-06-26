@@ -27,7 +27,6 @@
 #include "fs/AllocatedPath.hxx"
 #include "DecoderAPI.hxx"
 #include "input/InputStream.hxx"
-#include "input/LocalOpen.hxx"
 #include "input/Registry.hxx"
 #include "DecoderList.hxx"
 #include "system/Error.hxx"
@@ -48,48 +47,6 @@
 static constexpr Domain decoder_thread_domain("decoder_thread");
 
 /**
- * Opens the input stream with InputStream::Open(), and waits until
- * the stream gets ready.
- *
- * Unlock the decoder before calling this function.
- */
-static InputStreamPtr
-decoder_input_stream_open(DecoderControl &dc, const char *uri)
-{
-	auto is = InputStream::Open(uri, dc.mutex);
-	is->SetHandler(&dc);
-
-	/* wait for the input stream to become ready; its metadata
-	   will be available then */
-
-	const std::lock_guard<Mutex> protect(dc.mutex);
-
-	is->Update();
-	while (!is->IsReady()) {
-		if (dc.command == DecoderCommand::STOP)
-			throw StopDecoder();
-
-		dc.Wait();
-
-		is->Update();
-	}
-
-	is->Check();
-
-	return is;
-}
-
-static InputStreamPtr
-decoder_input_stream_open(DecoderControl &dc, Path path)
-{
-	auto is = OpenLocalInputStream(path, dc.mutex);
-
-	assert(is->IsReady());
-
-	return is;
-}
-
-/**
  * Decode a stream with the given decoder plugin.
  *
  * Caller holds DecoderControl::mutex.
@@ -97,7 +54,8 @@ decoder_input_stream_open(DecoderControl &dc, Path path)
 static bool
 decoder_stream_decode(const DecoderPlugin &plugin,
 		      DecoderBridge &bridge,
-		      InputStream &input_stream)
+		      InputStream &input_stream,
+		      std::unique_lock<Mutex> &lock)
 {
 	assert(plugin.stream_decode != nullptr);
 	assert(bridge.stream_tag == nullptr);
@@ -112,7 +70,7 @@ decoder_stream_decode(const DecoderPlugin &plugin,
 
 	/* rewind the stream, so each plugin gets a fresh start */
 	try {
-		input_stream.Rewind();
+		input_stream.Rewind(lock);
 	} catch (...) {
 	}
 
@@ -203,6 +161,7 @@ decoder_check_plugin(const DecoderPlugin &plugin, const InputStream &is,
 
 static bool
 decoder_run_stream_plugin(DecoderBridge &bridge, InputStream &is,
+			  std::unique_lock<Mutex> &lock,
 			  const char *suffix,
 			  const DecoderPlugin &plugin,
 			  bool &tried_r)
@@ -210,14 +169,15 @@ decoder_run_stream_plugin(DecoderBridge &bridge, InputStream &is,
 	if (!decoder_check_plugin(plugin, is, suffix))
 		return false;
 
-	bridge.error = std::exception_ptr();
+	bridge.Reset();
 
 	tried_r = true;
-	return decoder_stream_decode(plugin, bridge, is);
+	return decoder_stream_decode(plugin, bridge, is, lock);
 }
 
 static bool
 decoder_run_stream_locked(DecoderBridge &bridge, InputStream &is,
+			  std::unique_lock<Mutex> &lock,
 			  const char *uri, bool &tried_r)
 {
 	UriSuffixBuffer suffix_buffer;
@@ -225,7 +185,8 @@ decoder_run_stream_locked(DecoderBridge &bridge, InputStream &is,
 
 	using namespace std::placeholders;
 	const auto f = std::bind(decoder_run_stream_plugin,
-				 std::ref(bridge), std::ref(is), suffix,
+				 std::ref(bridge), std::ref(is), std::ref(lock),
+				 suffix,
 				 _1, std::ref(tried_r));
 	return decoder_plugins_try(f);
 }
@@ -234,7 +195,8 @@ decoder_run_stream_locked(DecoderBridge &bridge, InputStream &is,
  * Try decoding a stream, using the fallback plugin.
  */
 static bool
-decoder_run_stream_fallback(DecoderBridge &bridge, InputStream &is)
+decoder_run_stream_fallback(DecoderBridge &bridge, InputStream &is,
+			    std::unique_lock<Mutex> &lock)
 {
 	const struct DecoderPlugin *plugin;
 
@@ -244,7 +206,7 @@ decoder_run_stream_fallback(DecoderBridge &bridge, InputStream &is)
 	plugin = decoder_plugin_from_name("mad");
 #endif
 	return plugin != nullptr && plugin->stream_decode != nullptr &&
-		decoder_stream_decode(*plugin, bridge, is);
+		decoder_stream_decode(*plugin, bridge, is, lock);
 }
 
 /**
@@ -286,21 +248,21 @@ decoder_run_stream(DecoderBridge &bridge, const char *uri)
 {
 	DecoderControl &dc = bridge.dc;
 
-	auto input_stream = decoder_input_stream_open(dc, uri);
+	auto input_stream = bridge.OpenUri(uri);
 	assert(input_stream);
 
 	MaybeLoadReplayGain(bridge, *input_stream);
 
-	const std::lock_guard<Mutex> protect(dc.mutex);
+	std::unique_lock<Mutex> lock(dc.mutex);
 
 	bool tried = false;
 	return dc.command == DecoderCommand::STOP ||
-		decoder_run_stream_locked(bridge, *input_stream, uri,
+		decoder_run_stream_locked(bridge, *input_stream, lock, uri,
 					  tried) ||
 		/* fallback to mp3: this is needed for bastard streams
 		   that don't have a suffix or set the mimeType */
 		(!tried &&
-		 decoder_run_stream_fallback(bridge, *input_stream));
+		 decoder_run_stream_fallback(bridge, *input_stream, lock));
 }
 
 /**
@@ -316,7 +278,7 @@ TryDecoderFile(DecoderBridge &bridge, Path path_fs, const char *suffix,
 	if (!plugin.SupportsSuffix(suffix))
 		return false;
 
-	bridge.error = std::exception_ptr();
+	bridge.Reset();
 
 	DecoderControl &dc = bridge.dc;
 
@@ -324,8 +286,9 @@ TryDecoderFile(DecoderBridge &bridge, Path path_fs, const char *suffix,
 		const std::lock_guard<Mutex> protect(dc.mutex);
 		return decoder_file_decode(plugin, bridge, path_fs);
 	} else if (plugin.stream_decode != nullptr) {
-		const std::lock_guard<Mutex> protect(dc.mutex);
-		return decoder_stream_decode(plugin, bridge, input_stream);
+		std::unique_lock<Mutex> lock(dc.mutex);
+		return decoder_stream_decode(plugin, bridge, input_stream,
+					     lock);
 	} else
 		return false;
 }
@@ -344,7 +307,7 @@ TryContainerDecoder(DecoderBridge &bridge, Path path_fs, const char *suffix,
 	    !plugin.SupportsSuffix(suffix))
 		return false;
 
-	bridge.error = nullptr;
+	bridge.Reset();
 
 	DecoderControl &dc = bridge.dc;
 	const std::lock_guard<Mutex> protect(dc.mutex);
@@ -383,7 +346,7 @@ decoder_run_file(DecoderBridge &bridge, const char *uri_utf8, Path path_fs)
 	InputStreamPtr input_stream;
 
 	try {
-		input_stream = decoder_input_stream_open(bridge.dc, path_fs);
+		input_stream = bridge.OpenLocal(path_fs, uri_utf8);
 	} catch (const std::system_error &e) {
 		if (IsPathNotFound(e) &&
 		    /* ENOTDIR means this may be a path inside a
@@ -479,19 +442,16 @@ decoder_run_song(DecoderControl &dc,
 
 		AtScopeExit(&bridge) {
 			/* flush the last chunk */
-			if (bridge.current_chunk != nullptr)
-				bridge.FlushChunk();
+			bridge.CheckFlushChunk();
 		};
 
 		success = DecoderUnlockedRunUri(bridge, uri, path_fs);
 
 	}
 
-	if (bridge.error) {
-		/* copy the Error from struct Decoder to
-		   DecoderControl */
-		std::rethrow_exception(bridge.error);
-	} else if (success)
+	bridge.CheckRethrowError();
+
+	if (success)
 		dc.state = DecoderState::STOP;
 	else {
 		const char *error_uri = song.GetURI();
@@ -502,7 +462,7 @@ decoder_run_song(DecoderControl &dc,
 		throw FormatRuntimeError("Failed to decode %s", error_uri);
 	}
 
-	dc.client_cond.signal();
+	dc.client_cond.notify_one();
 }
 
 /**
@@ -531,7 +491,7 @@ try {
 	dc.state = DecoderState::ERROR;
 	dc.command = DecoderCommand::NONE;
 	dc.error = std::current_exception();
-	dc.client_cond.signal();
+	dc.client_cond.notify_one();
 }
 
 void
@@ -539,7 +499,7 @@ DecoderControl::RunThread() noexcept
 {
 	SetThreadName("decoder");
 
-	const std::lock_guard<Mutex> protect(mutex);
+	std::unique_lock<Mutex> lock(mutex);
 
 	do {
 		assert(state == DecoderState::STOP ||
@@ -580,7 +540,7 @@ DecoderControl::RunThread() noexcept
 			break;
 
 		case DecoderCommand::NONE:
-			Wait();
+			Wait(lock);
 			break;
 		}
 	} while (command != DecoderCommand::NONE || !quit);

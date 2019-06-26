@@ -14,6 +14,9 @@ Once the client is connected to the server, they conduct a
 conversation until the client closes the connection. The
 conversation flow is always initiated by the client.
 
+All data between the client and the server is encoded in
+UTF-8.
+
 The client transmits a command sequence, terminated by the
 newline character ``\n``.  The server will
 respond with one or more lines, the last of which will be a
@@ -42,15 +45,34 @@ quotation marks.
 Argument strings are separated from the command and any other
 arguments by linear white-space (' ' or '\\t').
 
-All data between the client and the server is encoded in
-UTF-8.
-
 Responses
 =========
 
 A command returns ``OK`` on completion or
 ``ACK some error`` on failure.  These
 denote the end of command execution.
+
+Some commands return more data before the response ends with ``OK``.
+Each line is usually in the form ``NAME: VALUE``.  Example::
+
+  foo: bar
+  OK
+
+.. _binary:
+
+Binary Responses
+----------------
+
+Some commands can return binary data.  This is initiated by a line
+containing ``binary: 1234`` (followed as usual by a newline).  After
+that, the specified number of bytes of binary data follows, then a
+newline, and finally the ``OK`` line.  Example::
+
+  foo: bar
+  binary: 42
+  <42 bytes>
+  OK
+
 
 Failure responses
 -----------------
@@ -112,9 +134,9 @@ list begins with `command_list_begin` or
 `command_list_ok_begin` and ends with
 `command_list_end`.
 
-It does not execute any commands until the list has ended.
-The return value is whatever the return for a list of commands
-is.  On success for all commands,
+It does not execute any commands until the list has ended.  The
+response is a concatentation of all individual responses.
+On success for all commands,
 ``OK`` is returned.  If a command
 fails, no more commands are executed and the appropriate
 ``ACK`` error is returned. If
@@ -178,8 +200,9 @@ of:
   file's time stamp with the given value (ISO 8601 or UNIX
   time stamp).
 
-- ``(AudioFormat == 'SAMPLERATE:BITS:CHANNELS')``:
-  compares the audio format with the given value.
+- ``(AudioFormat == 'SAMPLERATE:BITS:CHANNELS')``: compares the audio
+  format with the given value.  See :ref:`audio_output_format` for a
+  detailed explanation.
 
 - ``(AudioFormat =~ 'SAMPLERATE:BITS:CHANNELS')``:
   matches the audio format with the given mask (i.e. one
@@ -251,6 +274,9 @@ The following tags are supported by :program:`MPD`:
 * **date**: the song's release date. This is usually a 4-digit year.
 * **composer**: the artist who composed the song.
 * **performer**: the artist who performed the song.
+* **grouping**: "used if the sound belongs to a larger category of
+  sounds/music" (`from the IDv2.4.0 TIT1 description
+  <http://id3.org/id3v2.4.0-frames>`_).
 * **comment**: a human-readable comment about this song. The exact meaning of this tag is not well-defined.
 * **disc**: the decimal disc number in a multi-disc album.
 * **label**: the name of the label or publisher.
@@ -414,15 +440,18 @@ Querying :program:`MPD`'s status
     - ``songid``: playlist songid of the current song stopped on or playing
     - ``nextsong`` [#since_0_15]_: playlist song number of the next song to be played
     - ``nextsongid`` [#since_0_15]_: playlist songid of the next song to be played
-    - ``time``: total time elapsed (of current playing/paused song)
+    - ``time``: total time elapsed (of current playing/paused song) in seconds
       (deprecated, use ``elapsed`` instead)
-    - ``elapsed`` [#since_0_16]_: Total time elapsed within the current song, but with higher resolution.
+    - ``elapsed`` [#since_0_16]_: Total time elapsed within the
+      current song in seconds, but with higher resolution.
     - ``duration`` [#since_0_20]_: Duration of the current song in seconds.
     - ``bitrate``: instantaneous bitrate in kbps
     - ``xfade``: ``crossfade`` in seconds
     - ``mixrampdb``: ``mixramp`` threshold in dB
     - ``mixrampdelay``: ``mixrampdelay`` in seconds
-    - ``audio``: The format emitted by the decoder plugin during playback, format: ``*samplerate:bits:channels*``. Check the user manual for a detailed explanation.
+    - ``audio``: The format emitted by the decoder plugin during
+      playback, format: ``samplerate:bits:channels``.  See
+      :ref:`audio_output_format` for a detailed explanation.
     - ``updating_db``: ``job id``
     - ``error``: if there is an error, returns message here
 
@@ -437,7 +466,7 @@ Querying :program:`MPD`'s status
     - ``albums``: number of albums
     - ``songs``: number of songs
     - ``uptime``: daemon uptime in seconds
-    - ``db_playtime``: sum of all song times in the db
+    - ``db_playtime``: sum of all song times in the database in seconds
     - ``db_update``: last db update in UNIX time
     - ``playtime``: time length of music played
 
@@ -599,7 +628,7 @@ Whenever possible, ids should be used.
     Deletes the song ``SONGID`` from the
     playlist
 
-:command:`move {FROM} [{START:END} | {TO}]`
+:command:`move [{FROM} | {START:END}] {TO}`
     Moves the song at ``FROM`` or range of songs
     at ``START:END`` [#since_0_15]_ to ``TO``
     in the playlist.
@@ -782,24 +811,24 @@ The music database
 ==================
 
 :command:`albumart {URI} {OFFSET}`
-    Searches the directory the file ``URI``
-    resides in and attempts to return a chunk of an album
+    Locate album art for the given song and return a chunk of an album
     art image file at offset ``OFFSET``.
-    Uses the filename "cover" with any of ".png, .jpg,
-    .tiff, .bmp".
+
+    This is currently implemented by searching the directory the file
+    resides in for a file called :file:`cover.png`, :file:`cover.jpg`,
+    :file:`cover.tiff` or :file:`cover.bmp`.
 
     Returns the file size and actual number
     of bytes read at the requested offset, followed
-    by the chunk requested as raw bytes, then a
+    by the chunk requested as raw bytes (see :ref:`binary`), then a
     newline and the completion code.
 
     Example::
 
-     albumart
+     albumart foo/bar.ogg 0
      size: 1024768
      binary: 8192
-     <8192 bytes>
-     OK
+     <8192 bytes>OK
 
 :command:`count {FILTER} [group {GROUPTYPE}]`
     Count the number of songs and their total playtime in
@@ -822,6 +851,17 @@ The music database
     A group with an empty value contains counts of matching song which
     don't this group tag.  It exists only if at least one such song is
     found.
+
+:command:`getfingerprint {URI}`
+
+    Calculate the song's audio fingerprint.  Example (abbreviated fingerprint)::
+
+      getfingerprint "foo/bar.ogg"
+      chromaprint: AQACcEmSREmWJJmkIT_6CCf64...
+      OK
+
+    This command is only available if MPD was built with
+    :file:`libchromaprint` (``-Dchromaprint=enabled``).
 
 .. _command_find:
 
@@ -860,8 +900,7 @@ The music database
 :command:`list {TYPE} {FILTER} [group {GROUPTYPE}]`
     Lists unique tags values of the specified type.
     ``TYPE`` can be any tag supported by
-    :program:`MPD` or
-    *file*.
+    :program:`MPD`.
 
     Additional arguments may specify a :ref:`filter <filter_syntax>`.
     The *group* keyword may be used
@@ -871,6 +910,10 @@ The music database
     grouped by their respective (album) artist::
 
      list album group albumartist
+
+    ``list file`` was implemented in an early :program:`MPD` version,
+    but does not appear to make a lot of sense.  It still works (to
+    avoid breaking compatibility), but is deprecated.
 
 .. _command_listall:
 
@@ -1053,7 +1096,8 @@ Stickers
 "Stickers" [#since_0_15]_ are pieces of
 information attached to existing
 :program:`MPD` objects (e.g. song files,
-directories, albums).  Clients can create arbitrary name/value
+directories, albums; but currently, they are only implemented for
+song).  Clients can create arbitrary name/value
 pairs.  :program:`MPD` itself does not assume
 any special meaning in them.
 

@@ -51,10 +51,10 @@ public:
 
 		defer_event.Schedule();
 
-		mutex.lock();
-		while (!done)
-			cond.wait(mutex);
-		mutex.unlock();
+		{
+			std::unique_lock<Mutex> lock(mutex);
+			cond.wait(lock, [this]{ return done; });
+		}
 
 		if (exception)
 			std::rethrow_exception(exception);
@@ -70,10 +70,9 @@ private:
 			exception = std::current_exception();
 		}
 
-		mutex.lock();
+		const std::lock_guard<Mutex> lock(mutex);
 		done = true;
-		cond.signal();
-		mutex.unlock();
+		cond.notify_one();
 	}
 };
 

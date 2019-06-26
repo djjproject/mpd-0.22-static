@@ -37,13 +37,12 @@
 
 class SmbclientNeighborExplorer final : public NeighborExplorer {
 	struct Server {
-		std::string name, comment;
+		const std::string name, comment;
 
-		bool alive;
+		Server(std::string &&_name, std::string &&_comment) noexcept
+			:name(std::move(_name)),
+			 comment(std::move(_comment)) {}
 
-		Server(std::string &&_name, std::string &&_comment)
-			:name(std::move(_name)), comment(std::move(_comment)),
-			 alive(true) {}
 		Server(const Server &) = delete;
 
 		gcc_pure
@@ -67,7 +66,7 @@ class SmbclientNeighborExplorer final : public NeighborExplorer {
 	bool quit;
 
 public:
-	SmbclientNeighborExplorer(NeighborListener &_listener)
+	SmbclientNeighborExplorer(NeighborListener &_listener) noexcept
 		:NeighborExplorer(_listener),
 		 thread(BIND_THIS_METHOD(ThreadFunc)) {}
 
@@ -77,8 +76,12 @@ public:
 	List GetList() const noexcept override;
 
 private:
-	void Run();
-	void ThreadFunc();
+	/**
+	 * Caller must lock the mutex.
+	 */
+	void Run() noexcept;
+
+	void ThreadFunc() noexcept;
 };
 
 void
@@ -91,10 +94,11 @@ SmbclientNeighborExplorer::Open()
 void
 SmbclientNeighborExplorer::Close() noexcept
 {
-	mutex.lock();
-	quit = true;
-	cond.signal();
-	mutex.unlock();
+	{
+		const std::lock_guard<Mutex> lock(mutex);
+		quit = true;
+		cond.notify_one();
+	}
 
 	thread.Join();
 }
@@ -112,7 +116,7 @@ SmbclientNeighborExplorer::GetList() const noexcept
 }
 
 static void
-ReadServer(NeighborExplorer::List &list, const smbc_dirent &e)
+ReadServer(NeighborExplorer::List &list, const smbc_dirent &e) noexcept
 {
 	const std::string name(e.name, e.namelen);
 	const std::string comment(e.comment, e.commentlen);
@@ -121,17 +125,17 @@ ReadServer(NeighborExplorer::List &list, const smbc_dirent &e)
 }
 
 static void
-ReadServers(NeighborExplorer::List &list, const char *uri);
+ReadServers(NeighborExplorer::List &list, const char *uri) noexcept;
 
 static void
-ReadWorkgroup(NeighborExplorer::List &list, const std::string &name)
+ReadWorkgroup(NeighborExplorer::List &list, const std::string &name) noexcept
 {
 	std::string uri = "smb://" + name;
 	ReadServers(list, uri.c_str());
 }
 
 static void
-ReadEntry(NeighborExplorer::List &list, const smbc_dirent &e)
+ReadEntry(NeighborExplorer::List &list, const smbc_dirent &e) noexcept
 {
 	switch (e.smbc_type) {
 	case SMBC_WORKGROUP:
@@ -145,17 +149,15 @@ ReadEntry(NeighborExplorer::List &list, const smbc_dirent &e)
 }
 
 static void
-ReadServers(NeighborExplorer::List &list, int fd)
+ReadServers(NeighborExplorer::List &list, int fd) noexcept
 {
 	smbc_dirent *e;
 	while ((e = smbc_readdir(fd)) != nullptr)
 		ReadEntry(list, *e);
-
-	smbc_closedir(fd);
 }
 
 static void
-ReadServers(NeighborExplorer::List &list, const char *uri)
+ReadServers(NeighborExplorer::List &list, const char *uri) noexcept
 {
 	int fd = smbc_opendir(uri);
 	if (fd >= 0) {
@@ -190,11 +192,14 @@ FindBeforeServerByURI(NeighborExplorer::List::const_iterator prev,
 }
 
 inline void
-SmbclientNeighborExplorer::Run()
+SmbclientNeighborExplorer::Run() noexcept
 {
-	List found = DetectServers(), lost;
+	List found, lost;
 
-	mutex.lock();
+	{
+		const ScopeUnlock unlock(mutex);
+		found = DetectServers();
+	}
 
 	const auto found_before_begin = found.before_begin();
 	const auto found_end = found.end();
@@ -219,7 +224,7 @@ SmbclientNeighborExplorer::Run()
 	     i != found_end; prev = i, i = std::next(prev))
 		list.push_front(*i);
 
-	mutex.unlock();
+	const ScopeUnlock unlock(mutex);
 
 	for (auto &i : lost)
 		listener.LostNeighbor(i);
@@ -229,26 +234,21 @@ SmbclientNeighborExplorer::Run()
 }
 
 inline void
-SmbclientNeighborExplorer::ThreadFunc()
+SmbclientNeighborExplorer::ThreadFunc() noexcept
 {
 	SetThreadName("smbclient");
 
-	mutex.lock();
+	std::unique_lock<Mutex> lock(mutex);
 
 	while (!quit) {
-		mutex.unlock();
-
 		Run();
 
-		mutex.lock();
 		if (quit)
 			break;
 
 		// TODO: sleep for how long?
-		cond.timed_wait(mutex, std::chrono::seconds(10));
+		cond.wait_for(lock, std::chrono::seconds(10));
 	}
-
-	mutex.unlock();
 }
 
 static std::unique_ptr<NeighborExplorer>

@@ -83,6 +83,11 @@ class HttpdClient final
 	 */
 	bool head_method = false;
 
+	/**
+	 * Should we reject this request?
+	 */
+	bool should_reject = false;
+
 	/* ICY */
 
 	/**
@@ -142,6 +147,8 @@ public:
 
 	/**
 	 * Frees the client and removes it from the server's client list.
+	 *
+	 * Caller must lock the mutex.
 	 */
 	void Close() noexcept;
 

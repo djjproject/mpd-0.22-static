@@ -72,21 +72,23 @@ public:
 	AsyncInputStream(EventLoop &event_loop, const char *_url,
 			 Mutex &_mutex,
 			 size_t _buffer_size,
-			 size_t _resume_at);
+			 size_t _resume_at) noexcept;
 
-	virtual ~AsyncInputStream();
+	virtual ~AsyncInputStream() noexcept;
 
-	EventLoop &GetEventLoop() {
+	auto &GetEventLoop() const noexcept {
 		return deferred_resume.GetEventLoop();
 	}
 
 	/* virtual methods from InputStream */
 	void Check() final;
-	bool IsEOF() noexcept final;
-	void Seek(offset_type new_offset) final;
-	std::unique_ptr<Tag> ReadTag() final;
-	bool IsAvailable() noexcept final;
-	size_t Read(void *ptr, size_t read_size) final;
+	bool IsEOF() const noexcept final;
+	void Seek(std::unique_lock<Mutex> &lock,
+		  offset_type new_offset) final;
+	std::unique_ptr<Tag> ReadTag() noexcept final;
+	bool IsAvailable() const noexcept final;
+	size_t Read(std::unique_lock<Mutex> &lock,
+		    void *ptr, size_t read_size) final;
 
 protected:
 	/**

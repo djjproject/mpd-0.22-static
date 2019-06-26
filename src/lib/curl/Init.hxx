@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Max Kellermann <max.kellermann@gmail.com>
+ * Copyright 2008-2019 Max Kellermann <max.kellermann@gmail.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,7 +30,8 @@
 #ifndef CURL_INIT_HXX
 #define CURL_INIT_HXX
 
-class Mutex;
+#include "thread/Mutex.hxx"
+
 class EventLoop;
 class CurlGlobal;
 
@@ -50,11 +51,19 @@ public:
 	CurlInit(const CurlInit &) = delete;
 	CurlInit &operator=(const CurlInit &) = delete;
 
-	CurlGlobal &operator*() {
+	CurlGlobal &operator*() noexcept {
 		return *instance;
 	}
 
-	CurlGlobal *operator->() {
+	const CurlGlobal &operator*() const noexcept {
+		return *instance;
+	}
+
+	CurlGlobal *operator->() noexcept {
+		return instance;
+	}
+
+	const CurlGlobal *operator->() const noexcept {
 		return instance;
 	}
 };

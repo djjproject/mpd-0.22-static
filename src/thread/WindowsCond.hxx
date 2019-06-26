@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Max Kellermann <max.kellermann@gmail.com>
+ * Copyright 2009-2019 Max Kellermann <max.kellermann@gmail.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +33,7 @@
 #include "CriticalSection.hxx"
 
 #include <chrono>
+#include <mutex>
 
 /**
  * Wrapper for a CONDITION_VARIABLE, backend for the Cond class.
@@ -48,29 +49,46 @@ public:
 	WindowsCond(const WindowsCond &other) = delete;
 	WindowsCond &operator=(const WindowsCond &other) = delete;
 
-	void signal() noexcept {
+	void notify_one() noexcept {
 		WakeConditionVariable(&cond);
 	}
 
-	void broadcast() noexcept {
+	void notify_all() noexcept {
 		WakeAllConditionVariable(&cond);
 	}
 
-private:
-	bool timed_wait(CriticalSection &mutex, DWORD timeout_ms) noexcept {
-		return SleepConditionVariableCS(&cond, &mutex.critical_section,
+	void wait(std::unique_lock<CriticalSection> &lock) noexcept {
+		SleepConditionVariableCS(&cond,
+					 &lock.mutex()->critical_section,
+					 INFINITE);
+	}
+
+	template<typename M, typename P>
+	void wait(std::unique_lock<M> &lock,
+		  P &&predicate) noexcept {
+		while (!predicate())
+			wait(lock);
+	}
+
+	bool wait_for(std::unique_lock<CriticalSection> &lock,
+		      std::chrono::steady_clock::duration timeout) noexcept {
+		auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
+		return SleepConditionVariableCS(&cond,
+						&lock.mutex()->critical_section,
 						timeout_ms);
 	}
 
-public:
-	bool timed_wait(CriticalSection &mutex,
-			std::chrono::steady_clock::duration timeout) noexcept {
-		auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
-		return timed_wait(mutex, timeout_ms);
-	}
+	template<typename M, typename P>
+	bool wait_for(std::unique_lock<M> &lock,
+		      std::chrono::steady_clock::duration timeout,
+		      P &&predicate) noexcept {
+		while (!predicate()) {
+			// TODO: without wait_until(), this multiplies the timeout
+			if (!wait_for(lock, timeout))
+				return predicate();
+		}
 
-	void wait(CriticalSection &mutex) noexcept {
-		timed_wait(mutex, INFINITE);
+		return true;
 	}
 };
 

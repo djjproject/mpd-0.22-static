@@ -33,10 +33,12 @@
 #include "NeighborCommands.hxx"
 #include "ClientCommands.hxx"
 #include "PartitionCommands.hxx"
+#include "FingerprintCommands.hxx"
 #include "OtherCommands.hxx"
 #include "Permission.hxx"
 #include "tag/Type.h"
 #include "Partition.hxx"
+#include "Instance.hxx"
 #include "client/Client.hxx"
 #include "client/Response.hxx"
 #include "util/Macros.hxx"
@@ -45,7 +47,7 @@
 
 #ifdef ENABLE_SQLITE
 #include "StickerCommands.hxx"
-#include "sticker/StickerDatabase.hxx"
+#include "sticker/Database.hxx"
 #endif
 
 #include <assert.h>
@@ -106,6 +108,9 @@ static constexpr struct command commands[] = {
 #ifdef ENABLE_DATABASE
 	{ "find", PERMISSION_READ, 1, -1, handle_find },
 	{ "findadd", PERMISSION_ADD, 1, -1, handle_findadd},
+#endif
+#ifdef ENABLE_CHROMAPRINT
+	{ "getfingerprint", PERMISSION_READ, 1, 1, handle_getfingerprint },
 #endif
 	{ "idle", PERMISSION_READ, 0, -1, handle_idle },
 	{ "kill", PERMISSION_ADMIN, -1, -1, handle_kill },
@@ -212,7 +217,7 @@ command_available(gcc_unused const Partition &partition,
 {
 #ifdef ENABLE_SQLITE
 	if (StringIsEqual(cmd->cmd, "sticker"))
-		return sticker_enabled();
+		return partition.instance.HasStickerDatabase();
 #endif
 
 #ifdef ENABLE_NEIGHBOR_PLUGINS
